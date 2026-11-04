@@ -1,0 +1,12 @@
+{
+  "name": "speedy-ng-api-staging",
+  "main": "speedy-ng-api-staging.js",
+  "compatibility_date": "2026-11-04",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "speedy-db-staging",
+      "database_id": "3952e772-6a78-4d39-b45a-70b543262bcf"
+    }
+  ]
+}
