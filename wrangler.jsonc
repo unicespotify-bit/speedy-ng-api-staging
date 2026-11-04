@@ -2,6 +2,9 @@
   "name": "speedy-ng-api-staging",
   "main": "speedy-ng-api-staging.js",
   "compatibility_date": "2026-11-04",
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",
