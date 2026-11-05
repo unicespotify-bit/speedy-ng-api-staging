@@ -1775,7 +1775,7 @@ async function nexarSocialBoostPurchase(request, env, url) {
       env.DB.prepare("UPDATE transactions SET status='successful' WHERE reference=? AND status='pending'").bind(`SB-${orderId}`)
     ]);
     const order = await env.DB.prepare('SELECT id, category, service, country, quantity, amount_minor, currency, status, provider_order_id, provider_status, created_at, updated_at FROM orders WHERE id=? AND customer_id=?').bind(orderId, customer.id).first();
-    return respond({ ok: true, order, message: 'Your Social Boosting order has been submitted.' }, 201, request);
+    return respond({ ok: true, order: customerSafeOrder(order), message: 'Your Social Boosting order has been submitted.' }, 201, request);
   } catch (error) {
     return jsonError(`The Social Boosting order could not be prepared. ${providerErrorMessage(error)}`, error?.status === 429 ? 429 : 502, request);
   }
