@@ -1491,7 +1491,7 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
       await env.DB.prepare("UPDATE orders SET provider_refund_confirmed=1, provider_refund_at=?, expires_at=?, failure_reason=? WHERE id=? AND status='processing'")
         .bind(declinedAt, declinedAt, `Provider declined rental: ${token}`, orderId).run();
       await refundVisualOrder(env, customer.id, orderId, `Provider declined rental: ${token}`);
-      return jsonError(`The provider could not issue a number (${token}). Your USD wallet has been restored.`, 502, request);
+      return jsonError('We could not complete your number rental. Your USD wallet has been restored.', 502, request);
     }
     await env.DB.prepare("UPDATE orders SET status='review', provider_status=?, failure_reason=?, updated_at=? WHERE id=? AND status='processing'")
       .bind(token.slice(0, 120), 'Provider returned an unrecognised rental response. Funds remain reserved pending reconciliation.', new Date().toISOString(), orderId).run();
@@ -1506,7 +1506,7 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
     .bind(providerId, phone, timerDates.providerCancelAt, timerDates.customerRefundAt, new Date(issuedAt).toISOString(), orderId, customer.id).run();
   const order = await getVisualOrder(env, customer.id, orderId);
   if (order) delete order.delivery_json;
-  return respond({ ok: true, order, message: 'Your number is ready. Check this order for incoming SMS codes.' }, 201, request);
+  return respond({ ok: true, order: customerSafeOrder(order), message: 'Your number is ready. Check this order for incoming SMS codes.' }, 201, request);
 }
 
 async function youngpgCustomerRoutes(request, env, url, path, method) {
