@@ -932,10 +932,10 @@ async function socialLogMarkup(env, listing) {
 
 async function getSocialLogOrder(env, customerId, orderId) {
   return env.DB.prepare(`SELECT id, category, service, country, quantity, amount_minor,
-      unit_amount_minor, currency, status, provider, provider_order_id,
-      failure_reason, created_at, updated_at, delivery_json
+      unit_amount_minor, currency, status, failure_reason, created_at, updated_at, delivery_json
     FROM orders WHERE id=? AND customer_id=? AND category IN ('social_logs','social_boosting')`).bind(orderId, customerId).first();
 }
+
 
 async function refundLocalSocialLogOrder(env, customerId, orderId, amountMinor, reason) {
   const now = new Date().toISOString();
