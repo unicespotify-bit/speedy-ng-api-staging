@@ -1818,7 +1818,7 @@ async function nexarSocialBoostRoutes(request, env, url, path, method) {
         if (success) await env.DB.prepare("UPDATE transactions SET status='successful' WHERE reference=? AND status='pending'").bind(`SB-${orderId}`).run();
       }
       const updated = await env.DB.prepare(`SELECT id, category, service, country, quantity, amount_minor, currency, status, provider_order_id, provider_status, created_at, updated_at, failure_reason FROM orders WHERE id=? AND customer_id=?`).bind(orderId, customer.id).first();
-      return respond({ ok: true, order: updated, message: failed ? 'The provider marked this order unsuccessful. Your USD wallet has been restored.' : success ? 'Your Social Boosting order is complete.' : 'Your order is still being processed.' }, 200, request);
+      return respond({ ok: true, order: customerSafeOrder(updated), message: failed ? 'The provider marked this order unsuccessful. Your USD wallet has been restored.' : success ? 'Your Social Boosting order is complete.' : 'Your order is still being processed.' }, 200, request);
     } catch (error) {
       return jsonError(`Could not refresh the provider order status. ${providerErrorMessage(error)}`, error?.status === 429 ? 429 : 502, request);
     }
