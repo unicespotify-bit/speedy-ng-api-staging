@@ -1375,7 +1375,7 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
       }
       const refunded = await refundVisualOrder(env, customer.id, orderId, 'Customer requested refund after provider confirmation and countdown completion.');
       const updated = await getVisualOrder(env, customer.id, orderId);
-      return respond({ ok: true, order: updated, refunded, message: refunded ? 'Your refund has been added to your USD wallet.' : 'This order has already changed state or been refunded.' }, 200, request);
+      return respond({ ok: true, order: customerSafeOrder(updated), refunded, message: refunded ? 'Your refund has been added to your USD wallet.' : 'This order has already changed state or been refunded.' }, 200, request);
     }
     const statusResult = await youngpgVirtualCall(env, 'getStatus', { id: order.provider_order_id });
     const token = String(statusResult.data || '').trim();
