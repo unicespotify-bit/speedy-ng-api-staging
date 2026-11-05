@@ -12,7 +12,8 @@
  */
 const ALLOWED_ORIGINS = new Set([
   "https://speedy-ng-admin.pages.dev",
-  "https://speedy-ng.pages.dev"
+  "https://speedy-ng.pages.dev",
+  "https://speedy-blue.unicespotify.workers.dev"
 ]);
 
 function corsHeaders(request) {
