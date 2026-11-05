@@ -1668,7 +1668,25 @@ async function refundNexarBoostOrder(env, customerId, orderId, amountMinor, reas
   ]);
   return Number(result[0]?.meta?.changes || 0) === 1;
 }
+function customerSafeOrder(order) {
+  if (!order) return order;
 
+  const {
+    provider,
+    provider_order_id,
+    provider_phone,
+    provider_status,
+    provider_service_code,
+    provider_country_code,
+    provider_cancel_at,
+    provider_refund_confirmed,
+    provider_refund_at,
+    provider_response_json,
+    ...safeOrder
+  } = order;
+
+  return safeOrder;
+}
 async function nexarSocialBoostPurchase(request, env, url) {
   const customer = await getCustomer(request, env);
   if (!customer) return jsonError('A verified customer login is required.', 401, request);
