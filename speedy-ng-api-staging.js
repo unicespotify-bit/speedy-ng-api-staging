@@ -1394,7 +1394,7 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
       await confirmVisualProviderRefund(env, orderId, token, 'Provider confirmed that the rental is cancelled. Customer refund becomes available when the countdown reaches zero.');
       const updated = await getVisualOrder(env, customer.id, orderId);
       const refundReady = Boolean(updated && Number(updated.provider_refund_confirmed) === 1 && updated.expires_at && Date.now() >= Date.parse(updated.expires_at));
-      return respond({ ok: true, status: updated?.status || 'processing', order: updated, refund_available: refundReady,
+      return respond({ ok: true, status: updated?.status || 'processing', order: customerSafeOrder(updated), refund_available: refundReady,
         message: refundReady ? 'Provider cancellation confirmed. Your refund is ready.' : 'Provider cancellation confirmed. Your refund becomes available when the countdown reaches zero.' }, 200, request);
     }
     const match = token.match(/^STATUS_OK:(.+)$/);
