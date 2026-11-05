@@ -1411,7 +1411,7 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
       ]);
       try { await youngpgVirtualCall(env, 'setStatus', { id: order.provider_order_id, status: 6 }); } catch (error) { console.error('YoungPG completion acknowledgement pending:', error?.message || error); }
       const updated = await getVisualOrder(env, customer.id, orderId);
-      return respond({ ok: true, status: 'completed', order: { ...updated, delivery_json: undefined }, delivery }, 200, request);
+     return respond({ ok: true, status: 'completed', order: customerSafeOrder(updated), delivery }, 200, request); 
     }
     return respond({ ok: false, status: 'review', provider_status: token.slice(0, 120), message: 'The provider returned an unrecognised status. Your funds remain reserved.' }, 202, request);
   }
