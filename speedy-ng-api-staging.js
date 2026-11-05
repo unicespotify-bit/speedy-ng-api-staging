@@ -1432,7 +1432,7 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
     const existing = await getVisualOrder(env, customer.id, prior.id);
     let delivery = null; try { delivery = existing?.delivery_json ? JSON.parse(existing.delivery_json) : null; } catch {}
     if (existing) delete existing.delivery_json;
-    return respond({ ok: true, duplicate_request: true, order: existing, delivery }, 200, request);
+    return respond({ ok: true, duplicate_request: true, order: customerSafeOrder(existing), delivery }, 200, request);
   }
 
   let quoteResponse;
