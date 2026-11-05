@@ -1331,15 +1331,17 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
     const unitUsd = markup.markup_type === 'fixed' ? baseUsd + value : baseUsd * (1 + value / 100);
     const unitMinor = Math.round(unitUsd * 100);
     if (!Number.isSafeInteger(unitMinor) || unitMinor <= 0) return jsonError('The calculated price is invalid.', 502, request);
-    return respond({ ok: true, quote: { country, service, provider_cost_ngn: price.cost_ngn, stock: price.stock,
-      exchange_rate_ngn_per_usd: rate, customer_price_minor: unitMinor, currency: 'USD' } }, 200, request);
+    return respond({
+  ok: true,
+  quote: {
+    country,
+    service,
+    stock: price.stock,
+    exchange_rate_ngn_per_usd: rate,
+    customer_price_minor: unitMinor,
+    currency: 'USD'
   }
-
-  if (isOrders && method === 'GET' && path === `${base}/orders`) {
-    const result = await env.DB.prepare(`SELECT id, category, service, country, quantity, amount_minor, currency,
-      status, provider, provider_order_id, provider_phone, provider_status, expires_at, provider_cancel_at, provider_refund_confirmed, provider_refund_at, failure_reason, created_at, updated_at
-      FROM orders WHERE customer_id=? AND category='visual_numbers' ORDER BY created_at DESC LIMIT 100`).bind(customer.id).all();
-    return respond({ ok: true, orders: result.results || [] }, 200, request);
+}, 200, request);
   }
 
   if (isOrders && path.startsWith(`${base}/orders/`)) {
