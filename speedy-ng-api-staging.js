@@ -1709,7 +1709,7 @@ async function nexarSocialBoostPurchase(request, env, url) {
   if (prior) {
     if (prior.request_hash !== requestHash) return jsonError('This order key was already used for different details.', 409, request);
     const existing = await env.DB.prepare("SELECT id, category, service, amount_minor, currency, status, provider_order_id, created_at, updated_at FROM orders WHERE id=? AND customer_id=?").bind(prior.id, customer.id).first();
-    return respond({ ok: true, duplicate_request: true, order: existing }, 200, request);
+    return respond({ ok: true, duplicate_request: true, order: customerSafeOrder(existing) }, 200, request);
   }
   try {
     const catalogueResponse = await nexarCall(env, 'social-boost/services', { params: { driver } });
