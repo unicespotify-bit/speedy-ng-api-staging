@@ -1355,7 +1355,7 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
     if (method === 'GET' && parts.length === 1) {
       let delivery = null; try { delivery = order.delivery_json ? JSON.parse(order.delivery_json) : null; } catch {}
       delete order.delivery_json;
-      return respond({ ok: true, order, delivery }, 200, request);
+      return respond({ ok: true, order: customerSafeOrder(order), delivery }, 200, request);
     }
     if (method !== 'POST' || parts.length !== 2 || !['check','cancel'].includes(parts[1])) return jsonError('Method not allowed.', 405, request);
     if (!order.provider_order_id) return respond({ ok: false, status: order.status, message: 'This order has no confirmed provider rental ID and needs reconciliation. Do not place it again.' }, 202, request);
