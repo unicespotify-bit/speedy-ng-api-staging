@@ -969,8 +969,8 @@ async function socialLogOrderRoutes(request, env, url, path, method) {
   if (method === 'GET' && path === '/api/customer/orders') {
     await ensureVisualOrderSchema(env);
     const result = await env.DB.prepare(`SELECT id, category, service, country, quantity,
-      amount_minor, currency, status, provider, provider_order_id, provider_phone, provider_status, expires_at, provider_cancel_at, provider_refund_confirmed, provider_refund_at, created_at, updated_at
-      FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 100`).bind(customer.id).all();
+  amount_minor, currency, status, expires_at, created_at, updated_at
+  FROM orders WHERE customer_id=? ORDER BY created_at DESC LIMIT 100`).bind(customer.id).all();
     return respond({ ok: true, orders: result.results || [] }, 200, request);
   }
   if (method === 'GET' && path.startsWith(orderPrefix)) {
