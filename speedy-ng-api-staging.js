@@ -1093,7 +1093,7 @@ async function socialLogOrderRoutes(request, env, url, path, method) {
     }
 
     const completedAt = new Date().toISOString();
-    const delivery = { accounts, provider_order_id: providerOrderId };
+    const delivery = { accounts };
     await env.DB.batch([
       env.DB.prepare(`UPDATE orders SET status='completed', provider_order_id=?, provider_response_json=?,
         delivery_json=?, updated_at=? WHERE id=? AND customer_id=? AND status='processing'`)
