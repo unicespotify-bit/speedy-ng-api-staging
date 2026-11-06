@@ -2230,27 +2230,78 @@ async function handle(request, env) {
 
 async function processExpiredVisualNumberOrders(env) {
   await ensureVisualOrderSchema(env);
-  const due = await env.DB.prepare(`SELECT id, customer_id, provider_order_id, provider_phone, provider_cancel_at,
-      expires_at, provider_refund_confirmed, status
-    FROM orders WHERE category='visual_numbers' AND provider='youngpg_virtual' AND status IN ('processing','review')
-      AND provider_order_id IS NOT NULL AND COALESCE(provider_refund_confirmed,0)=0
-    ORDER BY created_at ASC LIMIT 100`).all();
-  let checked = 0, providerConfirmed = 0, completed = 0, deferred = 0;
+
+  const due = await env.DB.prepare(`
+    SELECT id, customer_id, provider_order_id, provider_phone,
+      provider_cancel_at, expires_at, provider_refund_confirmed, status
+    FROM orders
+    WHERE category='visual_numbers'
+      AND provider='youngpg_virtual'
+      AND status IN ('processing','review')
+      AND provider_order_id IS NOT NULL
+    ORDER BY created_at ASC
+    LIMIT 100
+  `).all();
+
+  let checked = 0;
+  let providerConfirmed = 0;
+  let completed = 0;
+  let refunded = 0;
+  let deferred = 0;
+
   for (const order of due.results || []) {
     checked++;
+
     try {
+      if (Number(order.provider_refund_confirmed || 0) === 1) {
+        const wasRefunded = await refundVisualOrder(
+          env,
+          order.customer_id,
+          order.id,
+          'YoungPG cancellation and provider refund confirmed.'
+        );
+
+        if (wasRefunded) refunded++;
+        else deferred++;
+
+        continue;
+      }
+
       const result = await attemptVisualProviderCancellation(env, order);
+
       if (result.confirmed) providerConfirmed++;
       else if (result.completed) completed++;
       else if (result.reason !== 'not_due') deferred++;
+
+      // If cancellation was confirmed, attempt the customer refund.
+      // refundVisualOrder checks that the rental expiry has passed.
+      if (result.confirmed) {
+        const wasRefunded = await refundVisualOrder(
+          env,
+          order.customer_id,
+          order.id,
+          'YoungPG cancellation and provider refund confirmed.'
+        );
+
+        if (wasRefunded) refunded++;
+      }
     } catch (error) {
       deferred++;
-      console.error('Visual Numbers automatic status check deferred:', order.id, error?.message || error);
+      console.error(
+        'Visual Numbers automatic refund check deferred:',
+        order.id,
+        error?.message || error
+      );
     }
   }
-  // Provider confirmation is recorded here; customer wallet credit is only made
-  // when the customer presses Refund after their configured timer has elapsed.
-  return { checked, providerConfirmed, completed, deferred };
+
+  return {
+    checked,
+    providerConfirmed,
+    completed,
+    refunded,
+    deferred
+  };
 }
 
 
