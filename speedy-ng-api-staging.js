@@ -2209,29 +2209,95 @@ async function handle(request, env) {
 
 async function processExpiredVisualNumberOrders(env) {
   await ensureVisualOrderSchema(env);
-  const due = await env.DB.prepare(`SELECT id, customer_id, provider_order_id, provider_phone, provider_cancel_at,
-      expires_at, provider_refund_confirmed, status
-    FROM orders WHERE category='visual_numbers' AND provider='youngpg_virtual' AND status IN ('processing','review')
-      AND provider_order_id IS NOT NULL AND COALESCE(provider_refund_confirmed,0)=0
-    ORDER BY created_at ASC LIMIT 100`).all();
-  let checked = 0, providerConfirmed = 0, completed = 0, deferred = 0;
+
+  // First, check orders that still need provider cancellation.
+  const due = await env.DB.prepare(`
+    SELECT id, customer_id, provider_order_id, provider_phone,
+      provider_cancel_at, expires_at, provider_refund_confirmed, status
+    FROM orders
+    WHERE category='visual_numbers'
+      AND provider='youngpg_virtual'
+      AND status IN ('processing','review')
+      AND provider_order_id IS NOT NULL
+      AND COALESCE(provider_refund_confirmed,0)=0
+    ORDER BY created_at ASC
+    LIMIT 100
+  `).all();
+
+  let checked = 0;
+  let providerConfirmed = 0;
+  let completed = 0;
+  let refunded = 0;
+  let deferred = 0;
+
   for (const order of due.results || []) {
     checked++;
+
     try {
       const result = await attemptVisualProviderCancellation(env, order);
-      if (result.confirmed) providerConfirmed++;
-      else if (result.completed) completed++;
-      else if (result.reason !== 'not_due') deferred++;
+
+      if (result.confirmed) {
+        providerConfirmed++;
+      } else if (result.completed) {
+        completed++;
+      } else if (result.reason !== 'not_due') {
+        deferred++;
+      }
     } catch (error) {
       deferred++;
-      console.error('Visual Numbers automatic status check deferred:', order.id, error?.message || error);
+      console.error(
+        'Visual Numbers automatic status check deferred:',
+        order.id,
+        error?.message || error
+      );
     }
   }
-  // Provider confirmation is recorded here; customer wallet credit is only made
-  // when the customer presses Refund after their configured timer has elapsed.
-  return { checked, providerConfirmed, completed, deferred };
-}
 
+  // Next, automatically refund orders whose provider cancellation
+  // has been confirmed and whose customer countdown has expired.
+  const refundable = await env.DB.prepare(`
+    SELECT id, customer_id
+    FROM orders
+    WHERE category='visual_numbers'
+      AND provider='youngpg_virtual'
+      AND status IN ('processing','review')
+      AND provider_refund_confirmed=1
+      AND expires_at IS NOT NULL
+      AND expires_at<=?
+    ORDER BY created_at ASC
+    LIMIT 100
+  `).bind(new Date().toISOString()).all();
+
+  for (const order of refundable.results || []) {
+    try {
+      const success = await refundVisualOrder(
+        env,
+        order.customer_id,
+        order.id,
+        'Automatic refund: provider cancellation confirmed and order countdown expired.'
+      );
+
+      if (success) {
+        refunded++;
+      }
+    } catch (error) {
+      deferred++;
+      console.error(
+        'Visual Numbers automatic refund deferred:',
+        order.id,
+        error?.message || error
+      );
+    }
+  }
+
+  return {
+    checked,
+    providerConfirmed,
+    completed,
+    refunded,
+    deferred
+  };
+}
 
 export default {
   async fetch(request, env) {
