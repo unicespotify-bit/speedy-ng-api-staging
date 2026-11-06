@@ -1638,10 +1638,17 @@ async function nexarCall(env, endpoint, { method = 'GET', params = {}, body, ide
 async function nexarVirtualNumberRoutes(request, env, url, path, method) {
   const base = '/api/customer/official-numbers';
 
-  const customer = await getCustomer(request, env);
-  if (!customer) {
-    return jsonError('A verified customer login is required.', 401, request);
-  }
+const isOfficialNumbersRoute =
+  (method === 'GET' &&
+    (path === `${base}/countries` || path === `${base}/services`)) ||
+  (method === 'POST' && path === `${base}/price`);
+
+if (!isOfficialNumbersRoute) return null;
+
+const customer = await getCustomer(request, env);
+if (!customer) {
+  return jsonError('A verified customer login is required.', 401, request);
+}
 
   if (method === 'GET' && path === `${base}/countries`) {
     try {
