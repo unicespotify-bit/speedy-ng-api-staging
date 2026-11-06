@@ -1635,7 +1635,109 @@ async function nexarCall(env, endpoint, { method = 'GET', params = {}, body, ide
   if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
   return providerFetch(url.toString(), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
 }
+async function nexarVirtualNumberRoutes(request, env, url, path, method) {
+  const base = '/api/customer/official-numbers';
 
+  const customer = await getCustomer(request, env);
+  if (!customer) {
+    return jsonError('A verified customer login is required.', 401, request);
+  }
+
+  if (method === 'GET' && path === `${base}/countries`) {
+    try {
+      const result = await nexarCall(
+        env,
+        'virtual-numbers/countries'
+      );
+
+      const data = providerEnvelope(result.data);
+
+      return respond({
+        ok: true,
+        countries: Array.isArray(data)
+          ? data
+          : (data?.countries || data?.data || [])
+      }, 200, request);
+
+    } catch (error) {
+      return jsonError(
+        providerErrorMessage(error),
+        error?.status === 429 ? 429 : 502,
+        request
+      );
+    }
+  }
+
+  if (method === 'GET' && path === `${base}/services`) {
+    try {
+      const result = await nexarCall(
+        env,
+        'virtual-numbers/services'
+      );
+
+      const data = providerEnvelope(result.data);
+
+      return respond({
+        ok: true,
+        services: Array.isArray(data)
+          ? data
+          : (data?.services || data?.data || [])
+      }, 200, request);
+
+    } catch (error) {
+      return jsonError(
+        providerErrorMessage(error),
+        error?.status === 429 ? 429 : 502,
+        request
+      );
+    }
+  }
+
+  if (method === 'POST' && path === `${base}/price`) {
+    const body = await readBody(request);
+
+    const country = body?.country;
+    const service = body?.service;
+
+    if (
+      country === undefined ||
+      service === undefined ||
+      !/^[a-zA-Z0-9_-]{1,80}$/.test(String(country)) ||
+      !/^[a-zA-Z0-9_-]{1,80}$/.test(String(service))
+    ) {
+      return jsonError(
+        'Choose a valid country and service.',
+        400,
+        request
+      );
+    }
+
+    try {
+      const result = await nexarCall(
+        env,
+        'virtual-numbers/price',
+        {
+          method: 'POST',
+          body: { country, service }
+        }
+      );
+
+      return respond({
+        ok: true,
+        price: providerEnvelope(result.data)
+      }, 200, request);
+
+    } catch (error) {
+      return jsonError(
+        providerErrorMessage(error),
+        error?.status === 429 ? 429 : 502,
+        request
+      );
+    }
+  }
+
+  return null;
+    }
 function nexarMoneyFromService(service) {
   // Fail closed unless Nexar explicitly identifies a per-unit amount; do not guess whether a rate is per 1,000.
   const value = service?.unit_price ?? service?.price_per_unit;
