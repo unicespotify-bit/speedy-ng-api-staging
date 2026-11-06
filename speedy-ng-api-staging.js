@@ -2006,9 +2006,16 @@ async function handle(request, env) {
 
   const providerAdminResponse = await youngpgAdminRoutes(request, env, path, method);
   if (providerAdminResponse) return providerAdminResponse;
-
+const nexarVirtualResponse = await nexarVirtualNumberRoutes(
+  request,
+  env,
+  url,
+  path,
+  method
+);
+if (nexarVirtualResponse) return nexarVirtualResponse;
   const nexarResponse = await nexarSocialBoostRoutes(request, env, url, path, method);
-  if (nexarResponse) return nexarResponse;
+if (nexarResponse) return nexarResponse;
 
   if (method === "POST" && path === "/api/admin/initial-setup") {
     if (!env.ADMIN_SETUP_TOKEN) return jsonError("Configure the ADMIN_SETUP_TOKEN secret first.", 503, request);
