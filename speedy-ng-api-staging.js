@@ -1142,43 +1142,75 @@ function parseProviderJson(value) {
   return value;
 }
 function visualPriceEntry(raw, country, service) {
-  const data = parseProviderJson(raw);
-  if (!data || typeof data !== 'object') return null;
-  const root = providerEnvelope(data);
-  const candidates = [];
-  const add = value => { if (value && typeof value === 'object') candidates.push(value); };
-  const countryNode = root[country] ?? root[String(country)];
-  if (countryNode && typeof countryNode === 'object') {
-    add(countryNode[service] ?? countryNode[String(service)]);
-    add(countryNode.services?.[service]);
-  }
-  add(root[service]?.[country]);
-  add(root[service]);
-  if (Array.isArray(root)) {
-    for (const item of root) {
-      if (!item || typeof item !== 'object') continue;
-      const c = String(item.country ?? item.country_id ?? item.country_code ?? '');
-      const s = String(item.service ?? item.service_code ?? item.code ?? '');
-      if (c === String(country) && s === String(service)) add(item);
-    }
-  }
-  for (const candidate of candidates) {
-    const costRaw = candidate.cost ?? candidate.price_ngn ?? candidate.price ?? candidate.amount ?? candidate.retail_price;
-    const cost = Number(costRaw);
-    if (Number.isFinite(cost) && cost > 0) {
-      const stockRaw = candidate.count ?? candidate.stock ?? candidate.available ?? candidate.quantity;
-      const stock = stockRaw == null ? null : Number(stockRaw);
-      return { cost_ngn: cost, stock: Number.isFinite(stock) ? stock : null };
-    }
-    for (const [key, value] of Object.entries(candidate)) {
-      if (String(key) === String(service) && value && typeof value === 'object') {
-        const nested = visualPriceEntry({ [country]: { [service]: value } }, country, service);
-        if (nested) return nested;
-      }
-    }
-  }
-  return null;
+const data = parseProviderJson(raw);
+if (!data || typeof data !== 'object') return null;
+
+const root = providerEnvelope(data);
+const candidates = [];
+
+const findKey = (object, key) => {
+if (!object || typeof object !== 'object') return undefined;
+const wanted = String(key).toLowerCase();
+const actual = Object.keys(object).find(
+item => String(item).toLowerCase() === wanted
+);
+return actual === undefined ? undefined : object[actual];
+};
+
+const add = value => {
+if (value && typeof value === 'object') candidates.push(value);
+};
+
+const countryNode = findKey(root, country);
+
+if (countryNode && typeof countryNode === 'object') {
+add(findKey(countryNode, service));
+add(findKey(countryNode.services, service));
 }
+
+const serviceNode = findKey(root, service);
+add(findKey(serviceNode, country));
+add(serviceNode);
+
+if (Array.isArray(root)) {
+for (const item of root) {
+if (!item || typeof item !== 'object') continue;
+
+  const c = String(item.country ?? item.country_id ?? item.country_code ?? '');
+  const s = String(item.service ?? item.service_code ?? item.code ?? '');
+
+  if (
+    c.toLowerCase() === String(country).toLowerCase() &&
+    s.toLowerCase() === String(service).toLowerCase()
+  ) {
+    add(item);
+  }
+}
+
+}
+
+for (const candidate of candidates) {
+const costRaw = candidate.cost ?? candidate.price_ngn ??
+candidate.price ?? candidate.amount ?? candidate.retail_price;
+
+const cost = Number(costRaw);
+
+if (Number.isFinite(cost) && cost > 0) {
+  const stockRaw = candidate.count ?? candidate.stock ??
+    candidate.available ?? candidate.quantity;
+
+  const stock = stockRaw == null ? null : Number(stockRaw);
+
+  return {
+    cost_ngn: cost,
+    stock: Number.isFinite(stock) ? stock : null
+  };
+}
+
+}
+
+return null;
+    }
 
 async function visualMarkup(env, country, service) {
   const result = await env.DB.prepare(`SELECT markup_type, markup_value FROM pricing_rules WHERE active=1
