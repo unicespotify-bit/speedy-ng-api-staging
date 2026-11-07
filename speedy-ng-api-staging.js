@@ -1651,15 +1651,54 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
           { country, service }
         );
 
-        let prices = result.data;
-        if (typeof prices === 'string') {
-          try { prices = JSON.parse(prices); } catch {}
+        const prices = parseProviderJson(result.data);
+        const price = visualPriceEntry(prices, country, service);
+
+        if (!price) {
+          return jsonError(
+            'YoungPG returned catalogue data, but its price and stock could not be verified for this selection.',
+            502,
+            request
+          );
+        }
+
+        const setting = await env.DB.prepare(
+          "SELECT setting_value FROM app_settings WHERE setting_key='usd_ngn_rate'"
+        ).first();
+
+        const rate = Number(setting?.setting_value || 1500);
+
+        if (!Number.isFinite(rate) || rate <= 0) {
+          return jsonError('The NGN/USD exchange rate is not configured.', 503, request);
+        }
+
+        const markup = await visualMarkup(env, country, service);
+        const baseUsd = price.cost_ngn / rate;
+        const markupValue = Number(markup.markup_value || 0);
+
+        const customerUsd = markup.markup_type === 'fixed'
+          ? baseUsd + markupValue
+          : baseUsd * (1 + markupValue / 100);
+
+        const customerPriceMinor = Math.round(customerUsd * 100);
+
+        if (!Number.isSafeInteger(customerPriceMinor) || customerPriceMinor <= 0) {
+          return jsonError('The calculated customer price is invalid.', 502, request);
         }
 
         return respond({
           ok: true,
           country,
           service,
+          inventory: {
+            available: price.stock,
+            provider_price_ngn: price.cost_ngn,
+            provider_price_usd: Number(baseUsd.toFixed(4)),
+            exchange_rate_ngn_per_usd: rate,
+            customer_price_usd: Number((customerPriceMinor / 100).toFixed(2)),
+            customer_price_minor: customerPriceMinor,
+            currency: 'USD'
+          },
           prices
         }, 200, request);
       }
