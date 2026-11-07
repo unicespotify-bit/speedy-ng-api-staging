@@ -867,11 +867,19 @@ async function youngpgVirtualCachedCall(env, action, params = {}, ttlMs = 60000)
   const pending = youngpgVirtualCall(env, action, params)
     .then(result => {
       YOUNGPG_CATALOGUE_CACHE.set(key, {
-        value: result,
-        expiresAt: Date.now() + ttlMs
-      });
+  value: result,
+  expiresAt: Date.now() + ttlMs
+});
 
-      return result;
+if (YOUNGPG_CATALOGUE_CACHE.size > 200) {
+  for (const [cacheKey, entry] of YOUNGPG_CATALOGUE_CACHE) {
+    if (!entry.pending && entry.expiresAt <= Date.now()) {
+      YOUNGPG_CATALOGUE_CACHE.delete(cacheKey);
+    }
+  }
+}
+
+return result;
     })
     .catch(error => {
       YOUNGPG_CATALOGUE_CACHE.delete(key);
