@@ -1593,7 +1593,7 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
   }
 }
 
-async function youngpgAdminRoutes(request, env, path, method) {
+async function youngpgAdminRoutes(request, env, url, path, method) {
   const visualBase = '/api/admin/catalogue/visual-numbers/';
   const logsBase = '/api/admin/catalogue/social-logs/';
 
@@ -2165,7 +2165,7 @@ async function handle(request, env) {
   const providerCustomerResponse = await youngpgCustomerRoutes(request, env, url, path, method);
   if (providerCustomerResponse) return providerCustomerResponse;
 
-  const providerAdminResponse = await youngpgAdminRoutes(request, env, path, method);
+  const providerAdminResponse = await youngpgAdminRoutes(request, env, url, path, method);
   if (providerAdminResponse) return providerAdminResponse;
 const nexarVirtualResponse = await nexarVirtualNumberRoutes(
   request,
