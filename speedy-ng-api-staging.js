@@ -1694,7 +1694,7 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
   if (isCatalogueRoute) {
     try {
       if (path === visualBase + 'countries') {
-        const result = await youngpgVirtualCall(env, 'getCountries');
+        const result = await youngpgVirtualCachedCall(env, 'getCountries', {}, 300000);
         let countries = result.data;
         if (typeof countries === 'string') {
           try { countries = JSON.parse(countries); } catch {}
@@ -1703,7 +1703,7 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
       }
 
       if (path === visualBase + 'services') {
-        const result = await youngpgVirtualCall(env, 'getServicesList');
+        const result = await youngpgVirtualCachedCall(env, 'getServicesList', {}, 300000);
         let services = result.data;
         if (typeof services === 'string') {
           try { services = JSON.parse(services); } catch {}
@@ -1719,7 +1719,12 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
           return jsonError('Country and service are required.', 400, request);
         }
 
-        const result = await youngpgVirtualCachedCall(env, 'getCountries', {}, 300000);
+        const result = await youngpgVirtualCachedCall(
+  env,
+  'getPrices',
+  { country, service },
+  60000
+);
 
         const prices = parseProviderJson(result.data);
         const price = visualPriceEntry(prices, country, service);
