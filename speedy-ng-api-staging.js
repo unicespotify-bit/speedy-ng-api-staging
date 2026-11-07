@@ -2062,7 +2062,166 @@ if (nexarResponse) return nexarResponse;
 
   const admin = await getAdmin(request, env);
   if (!admin) return jsonError("Administrator login required.", 401, request);
+// Admin announcement management
+  if (method === "GET" && path === "/api/admin/announcements") {
+    const result = await env.DB.prepare(
+      "SELECT id, title, message, type, is_active, created_at, updated_at, created_by FROM admin_announcements ORDER BY created_at DESC LIMIT 200"
+    ).all();
 
+    return respond({
+      ok: true,
+      announcements: result.results || []
+    }, 200, request);
+  }
+
+  if (method === "POST" && path === "/api/admin/announcements") {
+    const body = await readBody(request);
+    const title = String(body?.title || "").trim();
+    const message = String(body?.message || "").trim();
+    const type = String(body?.type || "info").toLowerCase();
+
+    if (!title || title.length > 120)
+      return jsonError("Title is required (maximum 120 characters).", 400, request);
+
+    if (!message || message.length > 5000)
+      return jsonError("Message is required (maximum 5,000 characters).", 400, request);
+
+    if (!["info", "success", "warning", "important"].includes(type))
+      return jsonError("Invalid announcement type.", 400, request);
+
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    await env.DB.prepare(`
+      INSERT INTO admin_announcements
+      (id, title, message, type, is_active, created_at, updated_at, created_by)
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+    `).bind(id, title, message, type, now, now, admin.id).run();
+
+    await env.DB.prepare(`
+      INSERT INTO audit_logs (admin_id, action, detail, created_at)
+      VALUES (?, ?, ?, ?)
+    `).bind(
+      admin.id,
+      "announcement.created",
+      JSON.stringify({ announcement_id: id, title }),
+      now
+    ).run();
+
+    return respond({
+      ok: true,
+      message: "Announcement created.",
+      id
+    }, 201, request);
+  }
+
+  if (path.startsWith("/api/admin/announcements/")) {
+    const id = decodeURIComponent(
+      path.slice("/api/admin/announcements/".length)
+    );
+
+    if (!id || id.includes("/"))
+      return jsonError("Invalid announcement ID.", 400, request);
+
+    const existing = await env.DB.prepare(
+      "SELECT id, title FROM admin_announcements WHERE id = ?"
+    ).bind(id).first();
+
+    if (!existing)
+      return jsonError("Announcement not found.", 404, request);
+
+    if (method === "PATCH") {
+      const body = await readBody(request);
+
+      if (!body || typeof body !== "object" || Array.isArray(body))
+        return jsonError("Invalid announcement update.", 400, request);
+
+      const updates = [];
+      const values = [];
+
+      if (body.title !== undefined) {
+        const title = String(body.title).trim();
+        if (!title || title.length > 120)
+          return jsonError("Invalid title.", 400, request);
+        updates.push("title = ?");
+        values.push(title);
+      }
+
+      if (body.message !== undefined) {
+        const message = String(body.message).trim();
+        if (!message || message.length > 5000)
+          return jsonError("Invalid message.", 400, request);
+        updates.push("message = ?");
+        values.push(message);
+      }
+
+      if (body.type !== undefined) {
+        const type = String(body.type).toLowerCase();
+        if (!["info", "success", "warning", "important"].includes(type))
+          return jsonError("Invalid announcement type.", 400, request);
+        updates.push("type = ?");
+        values.push(type);
+      }
+
+      if (body.is_active !== undefined) {
+        if (![0, 1, true, false].includes(body.is_active))
+          return jsonError("Invalid active status.", 400, request);
+        updates.push("is_active = ?");
+        values.push(body.is_active === true || body.is_active === 1 ? 1 : 0);
+      }
+
+      if (!updates.length)
+        return jsonError("No changes provided.", 400, request);
+
+      const now = new Date().toISOString();
+      updates.push("updated_at = ?");
+      values.push(now, id);
+
+      await env.DB.prepare(
+        `UPDATE admin_announcements SET ${updates.join(", ")} WHERE id = ?`
+      ).bind(...values).run();
+
+      await env.DB.prepare(`
+        INSERT INTO audit_logs (admin_id, action, detail, created_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(
+        admin.id,
+        "announcement.updated",
+        JSON.stringify({ announcement_id: id }),
+        now
+      ).run();
+
+      return respond({
+        ok: true,
+        message: "Announcement updated."
+      }, 200, request);
+    }
+
+    if (method === "DELETE") {
+      const now = new Date().toISOString();
+
+      await env.DB.prepare(
+        "DELETE FROM admin_announcements WHERE id = ?"
+      ).bind(id).run();
+
+      await env.DB.prepare(`
+        INSERT INTO audit_logs (admin_id, action, detail, created_at)
+        VALUES (?, ?, ?, ?)
+      `).bind(
+        admin.id,
+        "announcement.deleted",
+        JSON.stringify({ announcement_id: id, title: existing.title }),
+        now
+      ).run();
+
+      return respond({
+        ok: true,
+        message: "Announcement deleted."
+      }, 200, request);
+    }
+
+    return jsonError("Method not allowed.", 405, request);
+            }
   if (method === "GET" && path === "/api/admin/integrations/status") {
     const from = String(env.EMAIL_FROM || "");
     const emailDomain = (from.match(/@([A-Za-z0-9.-]+)/) || [])[1] || "";
