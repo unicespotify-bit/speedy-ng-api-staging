@@ -825,8 +825,18 @@ async function providerFetch(url, init = {}) {
 }
 
 function providerErrorMessage(error) {
-  if (error?.name === 'AbortError') return 'Provider request timed out. No purchase was attempted.';
-  if (error?.status === 429) return `Provider rate limit reached${error.retryAfter ? `. Retry after ${error.retryAfter} seconds` : ''}.`;
+  if (error?.name === 'AbortError') {
+    return 'Provider request timed out. No purchase was attempted.';
+  }
+
+  if (error?.status === 429) {
+    return `Provider rate limit reached${error.retryAfter ? `. Retry after ${error.retryAfter} seconds` : ''}. Please wait before trying again.`;
+  }
+
+  if (error?.status >= 400 && error?.status < 500 && error?.providerBody) {
+    return `Provider returned HTTP ${error.status}: ${String(error.providerBody).slice(0, 300)}`;
+  }
+
   return error?.message || 'Provider request failed.';
 }
 
