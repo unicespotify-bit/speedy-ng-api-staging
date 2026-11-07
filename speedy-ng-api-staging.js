@@ -1686,55 +1686,66 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
         const prices = parseProviderJson(result.data);
         const price = visualPriceEntry(prices, country, service);
 
-       if (!price) {
-  const data = parseProviderJson(prices);
-  const root = data && typeof data === 'object' && 'data' in data
-    ? data.data
-    : data;
+       TV        if (!price) {
+          const data = parseProviderJson(prices);
+          const root = data && typeof data === 'object' && 'data' in data
+            ? data.data
+            : data;
 
-  const describe = value => {
-    if (Array.isArray(value)) {
-      return `array(${value.length})`;
-    }
+          const findKey = (object, key) => {
+            if (!object || typeof object !== 'object') return undefined;
+            const wanted = String(key).toLowerCase();
+            const actual = Object.keys(object).find(
+              item => String(item).toLowerCase() === wanted
+            );
+            return actual === undefined ? undefined : object[actual];
+          };
 
-    if (value && typeof value === 'object') {
-      return Object.entries(value)
-        .slice(0, 12)
-        .map(([key, item]) => {
-          const type = Array.isArray(item)
-            ? 'array'
-            : item === null
-              ? 'null'
-              : typeof item;
-          return `${key}:${type}`;
-        })
-        .join(', ');
-    }
+          const describe = value => {
+            if (Array.isArray(value)) {
+              return `array(${value.length})`;
+            }
 
-    return typeof value;
-  };
+            if (value && typeof value === 'object') {
+              return Object.entries(value)
+                .slice(0, 15)
+                .map(([key, item]) => {
+                  const type = Array.isArray(item)
+                    ? `array(${item.length})`
+                    : item === null
+                      ? 'null'
+                      : typeof item;
+                  return `${key}:${type}`;
+                })
+                .join(', ');
+            }
 
-  const countryNode = root && typeof root === 'object'
-    ? root[country]
-    : null;
+            return typeof value;
+          };
 
-  const serviceNode = countryNode && typeof countryNode === 'object'
-    ? countryNode[service]
-    : null;
+          const countryNode = findKey(root, country);
+          const serviceNode = findKey(countryNode, service);
 
-  const diagnostic = [
-    `Top level: ${describe(root)}`,
-    `Selected country: ${describe(countryNode)}`,
-    `Selected service: ${describe(serviceNode)}`,
-    `Service at root: ${describe(root?.[service])}`
-  ].join(' | ');
+          const diagnostic = [
+            `Selected country value: ${String(country)}`,
+            `Selected service value: ${String(service)}`,
+            `Top-level structure: ${describe(root)}`,
+            `Available country keys: ${
+              root && typeof root === 'object'
+                ? Object.keys(root).slice(0, 30).join(', ')
+                : 'not an object'
+            }`,
+            `Selected country structure: ${describe(countryNode)}`,
+            `Selected service structure: ${describe(serviceNode)}`,
+            `Service at root: ${describe(findKey(root, service))}`
+          ].join(' | ');
 
-  return jsonError(
-    `YoungPG catalogue format needs inspection. ${diagnostic}`,
-    502,
-    request
-  );
-                         }
+          return jsonError(
+            `YoungPG catalogue format needs inspection. ${diagnostic}`,
+            502,
+            request
+          );
+}
 
         const setting = await env.DB.prepare(
           "SELECT setting_value FROM app_settings WHERE setting_key='usd_ngn_rate'"
