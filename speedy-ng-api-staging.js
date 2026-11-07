@@ -1654,13 +1654,55 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
         const prices = parseProviderJson(result.data);
         const price = visualPriceEntry(prices, country, service);
 
-        if (!price) {
-          return jsonError(
-            'YoungPG returned catalogue data, but its price and stock could not be verified for this selection.',
-            502,
-            request
-          );
-        }
+       if (!price) {
+  const data = parseProviderJson(prices);
+  const root = data && typeof data === 'object' && 'data' in data
+    ? data.data
+    : data;
+
+  const describe = value => {
+    if (Array.isArray(value)) {
+      return `array(${value.length})`;
+    }
+
+    if (value && typeof value === 'object') {
+      return Object.entries(value)
+        .slice(0, 12)
+        .map(([key, item]) => {
+          const type = Array.isArray(item)
+            ? 'array'
+            : item === null
+              ? 'null'
+              : typeof item;
+          return `${key}:${type}`;
+        })
+        .join(', ');
+    }
+
+    return typeof value;
+  };
+
+  const countryNode = root && typeof root === 'object'
+    ? root[country]
+    : null;
+
+  const serviceNode = countryNode && typeof countryNode === 'object'
+    ? countryNode[service]
+    : null;
+
+  const diagnostic = [
+    `Top level: ${describe(root)}`,
+    `Selected country: ${describe(countryNode)}`,
+    `Selected service: ${describe(serviceNode)}`,
+    `Service at root: ${describe(root?.[service])}`
+  ].join(' | ');
+
+  return jsonError(
+    `YoungPG catalogue format needs inspection. ${diagnostic}`,
+    502,
+    request
+  );
+                         }
 
         const setting = await env.DB.prepare(
           "SELECT setting_value FROM app_settings WHERE setting_key='usd_ngn_rate'"
