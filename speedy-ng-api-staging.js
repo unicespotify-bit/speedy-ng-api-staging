@@ -1594,32 +1594,186 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
 }
 
 async function youngpgAdminRoutes(request, env, path, method) {
-  if (method !== 'POST' || path !== '/api/admin/providers/test') return null;
+  const visualBase = '/api/admin/catalogue/visual-numbers/';
+  const logsBase = '/api/admin/catalogue/social-logs/';
+
+  const isCatalogueRoute =
+    method === 'GET' &&
+    (
+      path === visualBase + 'countries' ||
+      path === visualBase + 'services' ||
+      path === visualBase + 'prices' ||
+      path === logsBase + 'categories' ||
+      path === logsBase + 'listings'
+    );
+
+  const isProviderTest =
+    method === 'POST' && path === '/api/admin/providers/test';
+
+  if (!isCatalogueRoute && !isProviderTest) return null;
+
   const admin = await getAdmin(request, env);
-  if (!admin) return jsonError('Administrator login required.', 401, request);
+  if (!admin) {
+    return jsonError('Administrator login required.', 401, request);
+  }
+
+  if (isCatalogueRoute) {
+    try {
+      if (path === visualBase + 'countries') {
+        const result = await youngpgVirtualCall(env, 'getCountries');
+        let countries = result.data;
+        if (typeof countries === 'string') {
+          try { countries = JSON.parse(countries); } catch {}
+        }
+        return respond({ ok: true, countries }, 200, request);
+      }
+
+      if (path === visualBase + 'services') {
+        const result = await youngpgVirtualCall(env, 'getServicesList');
+        let services = result.data;
+        if (typeof services === 'string') {
+          try { services = JSON.parse(services); } catch {}
+        }
+        return respond({ ok: true, services }, 200, request);
+      }
+
+      if (path === visualBase + 'prices') {
+        const country = url.searchParams.get('country');
+        const service = url.searchParams.get('service');
+
+        if (!country || !service) {
+          return jsonError('Country and service are required.', 400, request);
+        }
+
+        const result = await youngpgVirtualCall(
+          env,
+          'getPrices',
+          { country, service }
+        );
+
+        let prices = result.data;
+        if (typeof prices === 'string') {
+          try { prices = JSON.parse(prices); } catch {}
+        }
+
+        return respond({
+          ok: true,
+          country,
+          service,
+          prices
+        }, 200, request);
+      }
+
+      if (path === logsBase + 'categories') {
+        const result = await youngpgMediaCall(env, 'categories');
+
+        return respond({
+          ok: true,
+          categories: providerEnvelope(result.data)
+        }, 200, request);
+      }
+
+      if (path === logsBase + 'listings') {
+        const params = {
+          search: url.searchParams.get('search') || undefined,
+          category_id: url.searchParams.get('category_id') || undefined,
+          subcategory_id: url.searchParams.get('subcategory_id') || undefined,
+          sort: url.searchParams.get('sort') || undefined,
+          direction: url.searchParams.get('direction') || undefined,
+          per_page: Math.min(
+            100,
+            Math.max(1, Number(url.searchParams.get('per_page') || 50))
+          ),
+          page: Math.max(1, Number(url.searchParams.get('page') || 1))
+        };
+
+        const result = await youngpgMediaCall(env, 'listings', params);
+
+        return respond({
+          ok: true,
+          listings: providerEnvelope(result.data),
+          meta: result.data?.meta || null
+        }, 200, request);
+      }
+    } catch (error) {
+      console.error('Admin catalogue request failed:', error?.message || error);
+      return jsonError(
+        providerErrorMessage(error),
+        error?.status === 429 ? 429 : 502,
+        request
+      );
+    }
+  }
+
   const body = await readBody(request);
   const product = String(body?.product || '').toLowerCase();
-  if (!['visual_numbers', 'social_logs'].includes(product)) return jsonError('Choose visual_numbers or social_logs.', 400, request);
-  const provider = product === 'visual_numbers' ? 'youngpg_virtual' : 'youngpg_media';
+
+  if (!['visual_numbers', 'social_logs'].includes(product)) {
+    return jsonError('Choose visual_numbers or social_logs.', 400, request);
+  }
+
+  const provider = product === 'visual_numbers'
+    ? 'youngpg_virtual'
+    : 'youngpg_media';
+
   try {
     let message;
+
     if (product === 'visual_numbers') {
       const result = await youngpgVirtualCall(env, 'getBalance');
-      if (typeof result.data !== 'string' || !result.data.startsWith('ACCESS_BALANCE:')) throw new Error(`Unexpected balance response: ${String(result.data).slice(0, 160)}`);
+
+      if (
+        typeof result.data !== 'string' ||
+        !result.data.startsWith('ACCESS_BALANCE:')
+      ) {
+        throw new Error(
+          `Unexpected balance response: ${String(result.data).slice(0, 160)}`
+        );
+      }
+
       message = `Connected. ${result.data}`;
     } else {
       const result = await youngpgMediaCall(env, 'user/balance');
       const data = providerEnvelope(result.data);
       message = `Connected. Balance response received: ${JSON.stringify(data).slice(0, 300)}`;
     }
+
     await recordProviderCheck(env, provider, product, true, message);
-    await env.DB.prepare('INSERT INTO audit_logs (admin_id, action, detail, created_at) VALUES (?, ?, ?, ?)')
-      .bind(admin.id, 'provider.connection_test', JSON.stringify({ provider, product, result: 'connected' }), new Date().toISOString()).run();
-    return respond({ ok: true, provider, product, status: 'connected', message }, 200, request);
+
+    await env.DB.prepare(
+      'INSERT INTO audit_logs (admin_id, action, detail, created_at) VALUES (?, ?, ?, ?)'
+    ).bind(
+      admin.id,
+      'provider.connection_test',
+      JSON.stringify({ provider, product, result: 'connected' }),
+      new Date().toISOString()
+    ).run();
+
+    return respond({
+      ok: true,
+      provider,
+      product,
+      status: 'connected',
+      message
+    }, 200, request);
+
   } catch (error) {
     const message = providerErrorMessage(error);
-    try { await recordProviderCheck(env, provider, product, false, message); } catch (dbError) { console.error('Could not save provider test status:', dbError?.message || dbError); }
-    return jsonError(message, error?.status === 429 ? 429 : 502, request);
+
+    try {
+      await recordProviderCheck(env, provider, product, false, message);
+    } catch (dbError) {
+      console.error(
+        'Could not save provider test status:',
+        dbError?.message || dbError
+      );
+    }
+
+    return jsonError(
+      message,
+      error?.status === 429 ? 429 : 502,
+      request
+    );
   }
 }
 
