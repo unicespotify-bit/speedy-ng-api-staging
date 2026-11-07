@@ -10,6 +10,7 @@
  * rentals with SMS polling and confirmed cancellation/expiry refunds, plus
  * guarded Social Logs purchases and delivery history. Nexar Social Boost catalogue diagnostics are included; live purchases remain disabled pending verified credentials and price-currency mapping. Automatic Social Logs refunds are not enabled.
  */
+const YOUNGPG_CATALOGUE_CACHE = new Map();
 const ALLOWED_ORIGINS = new Set([
   "https://speedy-ng-admin.pages.dev",
   "https://speedy-ng-admin-staging.pages.dev",
@@ -849,7 +850,38 @@ async function youngpgVirtualCall(env, action, params = {}) {
   for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   return providerFetch(url.toString());
 }
+// Cache successful read-only YoungPG catalogue requests.
+async function youngpgVirtualCachedCall(env, action, params = {}, ttlMs = 60000) {
+  const key = JSON.stringify([action, params]);
+  const now = Date.now();
+  const cached = YOUNGPG_CATALOGUE_CACHE.get(key);
 
+  if (cached?.value && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  if (cached?.pending) {
+    return cached.pending;
+  }
+
+  const pending = youngpgVirtualCall(env, action, params)
+    .then(result => {
+      YOUNGPG_CATALOGUE_CACHE.set(key, {
+        value: result,
+        expiresAt: Date.now() + ttlMs
+      });
+
+      return result;
+    })
+    .catch(error => {
+      YOUNGPG_CATALOGUE_CACHE.delete(key);
+      throw error;
+    });
+
+  YOUNGPG_CATALOGUE_CACHE.set(key, { pending });
+
+  return pending;
+}
 async function youngpgMediaCall(env, endpoint, params = {}) {
   if (!env.YOUNGPG_MEDIA_API_KEY) throw new Error('YoungPG Media API key is not configured.');
   if (!/^ypg_[a-f0-9]{48}$/i.test(env.YOUNGPG_MEDIA_API_KEY)) throw new Error('YoungPG Media API key format is invalid.');
@@ -1687,11 +1719,7 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
           return jsonError('Country and service are required.', 400, request);
         }
 
-        const result = await youngpgVirtualCall(
-          env,
-          'getPrices',
-          { country, service }
-        );
+        const result = await youngpgVirtualCachedCall(env, 'getCountries', {}, 300000);
 
         const prices = parseProviderJson(result.data);
         const price = visualPriceEntry(prices, country, service);
