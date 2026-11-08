@@ -1871,9 +1871,18 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
         }, 200, request);
       }
     } catch (error) {
-      console.error('Admin catalogue request failed:', error?.message || error);
+      console.error('Admin catalogue request failed:', {
+        message: error?.message || error,
+        status: error?.status || null,
+        providerBody: error?.providerBody || null
+      });
+
+      const diagnostic = path === visualBase + 'prices'
+        ? `Visual Numbers request failed. Selected country: ${url.searchParams.get('country') || 'missing'}. Selected service: ${url.searchParams.get('service') || 'missing'}. Provider response: ${providerErrorMessage(error)}`
+        : providerErrorMessage(error);
+
       return jsonError(
-        providerErrorMessage(error),
+        diagnostic,
         error?.status === 429 ? 429 : 502,
         request
       );
