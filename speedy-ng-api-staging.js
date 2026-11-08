@@ -1721,6 +1721,7 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
 
       if (path === visualBase + 'prices') {
         const country = url.searchParams.get('country');
+const countryName = url.searchParams.get('country_name') || country;
         const service = url.searchParams.get('service');
 
         if (!country || !service) {
@@ -1735,7 +1736,7 @@ async function youngpgAdminRoutes(request, env, url, path, method) {
 );
 
         const prices = parseProviderJson(result.data);
-        const price = visualPriceEntry(prices, country, service);
+        const price = visualPriceEntry(prices, countryName, service, country);
 
               if (!price) {
           const data = parseProviderJson(prices);
