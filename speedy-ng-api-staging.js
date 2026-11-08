@@ -1198,12 +1198,18 @@ function visualPriceEntry(raw, country, service, countryId = country) {
   const root = providerEnvelope(data);
   const candidates = [];
 
+  const normalizeKey = value =>
+    String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, '_');
+
   const findKey = (object, key) => {
     if (!object || typeof object !== 'object') return undefined;
 
-    const wanted = String(key).trim().toLowerCase();
+    const wanted = normalizeKey(key);
     const actual = Object.keys(object).find(
-      item => String(item).trim().toLowerCase() === wanted
+      item => normalizeKey(item) === wanted
     );
 
     return actual === undefined ? undefined : object[actual];
