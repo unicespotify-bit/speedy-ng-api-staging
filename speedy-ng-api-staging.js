@@ -704,7 +704,118 @@ return respond({ ok: true, message: genericMessage }, 200, request);
     const verification = await sendVerificationEmail(env, customer);
     return respond({ ok: true, message: verification.sent ? "A new verification code has been sent." : (verification.reason || "Could not send a verification code."), verification_email_sent: verification.sent }, verification.sent ? 200 : 429, request);
   }
+if (method === "POST" && path === "/api/customer/reset-password") {
+const body = await readBody(request);
+if (!body) return jsonError("Invalid JSON.", 400, request);
 
+const email = String(body.email || "").trim().toLowerCase();
+const code = String(body.code || "").trim();
+const newPassword = String(body.newPassword || "");
+
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  return jsonError("Enter a valid email address.", 400, request);
+}
+
+if (!/^\d{6}$/.test(code)) {
+  return jsonError("Enter the six-digit reset code.", 400, request);
+}
+
+if (newPassword.length < 12 || newPassword.length > 200) {
+  return jsonError("Your new password must contain between 12 and 200 characters.", 400, request);
+}
+
+if (!(await allowAuthAttempt(env, request, "reset-password", email, 10, 10 * 60 * 1000))) {
+  return jsonError("Too many reset attempts. Please try again later.", 429, request);
+}
+
+const customer = await env.DB.prepare(
+  "SELECT id, email, status FROM customers WHERE email = ? COLLATE NOCASE"
+).bind(email).first();
+
+if (!customer || customer.status !== "active") {
+  return jsonError("The reset code is invalid or expired. Request a new code.", 400, request);
+}
+
+const pepper = env.EMAIL_VERIFICATION_PEPPER || env.ENCRYPTION_KEY;
+if (!pepper) {
+  return jsonError("Password reset security is not configured.", 503, request);
+}
+
+const record = await env.DB.prepare(`
+  SELECT id, code_hash, attempts, expires_at
+  FROM customer_password_resets
+  WHERE customer_id = ? AND consumed_at IS NULL
+  ORDER BY created_at DESC
+  LIMIT 1
+`).bind(customer.id).first();
+
+const now = new Date().toISOString();
+
+if (!record ||
+    new Date(record.expires_at).getTime() <= Date.now() ||
+    Number(record.attempts) >= 5) {
+  return jsonError("The reset code is invalid or expired. Request a new code.", 400, request);
+}
+
+const suppliedHash = await hash(`${customer.id}:${code}:${pepper}`);
+
+if (!safeStringEqual(suppliedHash, record.code_hash)) {
+  await env.DB.prepare(`
+    UPDATE customer_password_resets
+    SET attempts = attempts + 1
+    WHERE id = ? AND consumed_at IS NULL AND attempts < 5
+  `).bind(record.id).run();
+
+  return jsonError("The reset code is incorrect.", 400, request);
+}
+
+const newSalt = token();
+const newPasswordHash = await passwordHash(newPassword, newSalt);
+const consumeMarker = `${now}:${crypto.randomUUID()}`;
+
+const results = await env.DB.batch([
+  env.DB.prepare(`
+    UPDATE customer_password_resets
+    SET consumed_at = ?
+    WHERE id = ?
+      AND customer_id = ?
+      AND consumed_at IS NULL
+      AND expires_at > ?
+      AND attempts < 5
+  `).bind(consumeMarker, record.id, customer.id, now),
+
+  env.DB.prepare(`
+    UPDATE customers
+    SET password_hash = ?, password_salt = ?
+    WHERE id = ?
+      AND status = 'active'
+      AND EXISTS (
+        SELECT 1 FROM customer_password_resets
+        WHERE id = ? AND consumed_at = ?
+      )
+  `).bind(newPasswordHash, newSalt, customer.id, record.id, consumeMarker),
+
+  env.DB.prepare(`
+    DELETE FROM customer_sessions
+    WHERE customer_id = ?
+      AND EXISTS (
+        SELECT 1 FROM customer_password_resets
+        WHERE id = ? AND consumed_at = ?
+      )
+  `).bind(customer.id, record.id, consumeMarker)
+]);
+
+if (Number(results[0]?.meta?.changes || 0) !== 1 ||
+    Number(results[1]?.meta?.changes || 0) !== 1) {
+  return jsonError("The reset code is invalid, expired, or already used. Request a new code.", 400, request);
+}
+
+return respond({
+  ok: true,
+  message: "Your password has been reset successfully. Please sign in with your new password."
+}, 200, request);
+
+}
   if (method === "POST" && path === "/api/customer/login") {
     const body = await readBody(request);
     if (!body) return jsonError("Invalid JSON.", 400, request);
