@@ -588,7 +588,108 @@ async function customerRoutes(request, env, path, method) {
     }
     return respond({ ok: true, message: "Email verified successfully. You can now sign in." }, 200, request);
   }
+if (method === "POST" && path === "/api/customer/forgot-password") {
+const body = await readBody(request);
+if (!body) return jsonError("Invalid JSON.", 400, request);
 
+const email = String(body.email || "").trim().toLowerCase();
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  return jsonError("Enter a valid email address.", 400, request);
+}
+
+if (!(await allowAuthAttempt(env, request, "forgot-password", email, 5, 60 * 60 * 1000))) {
+  return jsonError("Too many requests. Please try again later.", 429, request);
+}
+
+const genericMessage = "If the account exists and is eligible, a password reset code will be sent.";
+
+const customer = await env.DB.prepare(
+  "SELECT id, email, email_verified FROM customers WHERE email = ? COLLATE NOCASE"
+).bind(email).first();
+
+if (!customer || Number(customer.email_verified) !== 1) {
+  return respond({ ok: true, message: genericMessage }, 200, request);
+}
+
+const pepper = env.EMAIL_VERIFICATION_PEPPER || env.ENCRYPTION_KEY;
+if (!pepper || !env.RESEND_API_KEY || !env.EMAIL_FROM) {
+  return jsonError("Password reset email is not configured.", 503, request);
+}
+
+const now = new Date();
+const nowIso = now.toISOString();
+const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+const oneMinuteAgo = new Date(now.getTime() - 60 * 1000).toISOString();
+
+const recent = await env.DB.prepare(
+  "SELECT COUNT(*) AS total FROM customer_password_resets WHERE customer_id = ? AND created_at > ?"
+).bind(customer.id, oneHourAgo).first();
+
+const latest = await env.DB.prepare(
+  "SELECT created_at FROM customer_password_resets WHERE customer_id = ? ORDER BY created_at DESC LIMIT 1"
+).bind(customer.id).first();
+
+if (Number(recent?.total || 0) >= 5 ||
+    (latest && latest.created_at > oneMinuteAgo)) {
+  return respond({ ok: true, message: genericMessage }, 200, request);
+}
+
+const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, "0");
+const resetId = token();
+const codeHash = await hash(`${customer.id}:${code}:${pepper}`);
+const expiresAt = new Date(now.getTime() + 10 * 60 * 1000).toISOString();
+
+await env.DB.prepare(
+  "UPDATE customer_password_resets SET consumed_at = ? WHERE customer_id = ? AND consumed_at IS NULL"
+).bind(nowIso, customer.id).run();
+
+await env.DB.prepare(`
+  INSERT INTO customer_password_resets
+    (id, customer_id, code_hash, attempts, expires_at, created_at)
+  VALUES (?, ?, ?, 0, ?, ?)
+`).bind(resetId, customer.id, codeHash, expiresAt, nowIso).run();
+
+try {
+  const emailResponse = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${env.RESEND_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      from: env.EMAIL_FROM,
+      to: [customer.email],
+      subject: "Reset your Speedy.ng password",
+      html: `
+        <div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;padding:24px;color:#10213d">
+          <h2>Reset your Speedy.ng password</h2>
+          <p>Use this verification code to reset your password:</p>
+          <div style="font-size:32px;font-weight:bold;letter-spacing:8px;padding:16px;background:#eef3ff;border-radius:10px;text-align:center">${code}</div>
+          <p>This code expires in exactly 10 minutes.</p>
+          <p>If you did not request a password reset, you can ignore this email.</p>
+        </div>
+      `
+    })
+  });
+
+  if (!emailResponse.ok) {
+    await env.DB.prepare(
+      "UPDATE customer_password_resets SET consumed_at = ? WHERE id = ?"
+    ).bind(new Date().toISOString(), resetId).run();
+
+    return jsonError("Unable to send the password reset email. Please try again later.", 503, request);
+  }
+} catch (error) {
+  await env.DB.prepare(
+    "UPDATE customer_password_resets SET consumed_at = ? WHERE id = ?"
+  ).bind(new Date().toISOString(), resetId).run();
+
+  return jsonError("Unable to send the password reset email. Please try again later.", 503, request);
+}
+
+return respond({ ok: true, message: genericMessage }, 200, request);
+
+}
   if (method === "POST" && path === "/api/customer/resend-verification") {
     const body = await readBody(request);
     if (!body) return jsonError("Invalid JSON.", 400, request);
