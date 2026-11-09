@@ -147,6 +147,21 @@ async function ensureCustomerSchema(env) {
           window_started_at TEXT NOT NULL
         )
       `).run();
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS customer_password_resets (
+          id TEXT PRIMARY KEY,
+          customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+          code_hash TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          expires_at TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          consumed_at TEXT
+        )
+      `).run();
+
+      await env.DB.prepare(
+        "CREATE INDEX IF NOT EXISTS idx_password_resets_customer_created ON customer_password_resets(customer_id, created_at DESC)"
+      ).run();
     })().catch(error => {
       customerSchemaReady = null;
       throw error;
