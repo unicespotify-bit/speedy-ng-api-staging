@@ -1869,10 +1869,11 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
       return respond({ ok: true, countries }, 200, request);
     }
     if (path === visualPrefix + 'services') {
-      const result = await youngpgVirtualCall(env, 'getServicesList');
-      let services = result.data;
-      if (typeof services === 'string') { try { services = JSON.parse(services); } catch {} }
-      return respond({ ok: true, services, country: url.searchParams.get('country') || null }, 200, request);
+  const country = url.searchParams.get('country');
+  const result = await youngpgVirtualCall(env, 'getServicesList', country ? { country } : {});
+  let services = result.data;
+  if (typeof services === 'string') { try { services = JSON.parse(services); } catch {} }
+  return respond({ ok: true, services, country: country || null }, 200, request);
     }
     if (path === visualPrefix + 'catalogue') {
       const country = url.searchParams.get('country');
