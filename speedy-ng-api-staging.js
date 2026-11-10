@@ -1449,7 +1449,7 @@ function visualPriceEntry(raw, country, service, countryId = country) {
   };
 
   const countryNode =
-    findKey(root, country) ||
+    findKey(root, country) ??
     findKey(root, countryId);
 
   if (countryNode && typeof countryNode === 'object') {
@@ -1510,6 +1510,36 @@ function visualPriceEntry(raw, country, service, countryId = country) {
       return {
         cost_ngn: cost,
         stock: Number.isFinite(stock) ? stock : null
+      };
+    }
+
+    // Support price-tier responses:
+    // { "2.99": 467, "3.50": 120 }
+    const tiers = Object.entries(candidate)
+      .map(([priceKey, quantityValue]) => ({
+        price: Number(priceKey),
+        stock: Number(quantityValue)
+      }))
+      .filter(item =>
+        Number.isFinite(item.price) &&
+        item.price > 0 &&
+        Number.isFinite(item.stock) &&
+        item.stock >= 0
+      );
+
+    if (tiers.length) {
+      // Prefer the cheapest tier that has stock.
+      const availableTiers = tiers
+        .filter(item => item.stock > 0)
+        .sort((a, b) => a.price - b.price);
+
+      const selectedTier = availableTiers.length
+        ? availableTiers[0]
+        : tiers.sort((a, b) => a.price - b.price)[0];
+
+      return {
+        cost_ngn: selectedTier.price,
+        stock: selectedTier.stock
       };
     }
   }
