@@ -3529,19 +3529,19 @@ async function processExpiredVisualNumberOrders(env) {
         OR provider_cancel_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         OR expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       )
-    ORDER BY
-  CASE
-    WHEN COALESCE(provider_refund_confirmed, 0) = 1 THEN 0
-    WHEN provider_cancel_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     AND (
         COALESCE(provider_refund_confirmed, 0) = 1
         OR provider_cancel_retry_at IS NULL
         OR provider_cancel_retry_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       )
-      OR expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now') THEN 1
-    ELSE 2
-  END ASC,
-  created_at ASC
+    ORDER BY
+      CASE
+        WHEN COALESCE(provider_refund_confirmed, 0) = 1 THEN 0
+        WHEN provider_cancel_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          OR expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now') THEN 1
+        ELSE 2
+      END ASC,
+      created_at ASC
 LIMIT 20
   `).all();
 
