@@ -2003,7 +2003,25 @@ if (!countryName) {
     request
   );
 }
+const cooldownKey = '__youngpg_virtual_global_cooldown__';
+const savedCooldown = await env.DB.prepare(
+  'SELECT setting_value FROM app_settings WHERE setting_key = ?'
+).bind('youngpg_virtual_cooldown_until').first();
 
+const sharedRetryAt = Number(savedCooldown?.setting_value || 0);
+const localCooldown = YOUNGPG_CATALOGUE_CACHE.get(cooldownKey);
+const retryAt = Math.max(
+  sharedRetryAt,
+  Number(localCooldown?.retryAt || 0)
+);
+
+if (Number.isFinite(retryAt) && retryAt > Date.now()) {
+  return jsonError(
+    `YoungPG is temporarily cooling down. Please retry in ${Math.ceil((retryAt - Date.now()) / 1000)} seconds. No funds were taken.`,
+    429,
+    request
+  );
+                             }
 let quoteResponse;
 
 try {
