@@ -1324,14 +1324,57 @@ async function socialLogOrderRoutes(request, env, url, path, method) {
   }
   if (method === 'GET' && path.startsWith(orderPrefix)) {
     let orderId;
-    try { orderId = decodeURIComponent(path.slice(orderPrefix.length)); } catch { return jsonError('Invalid order ID.', 400, request); }
-    if (!orderId || orderId.includes('/')) return jsonError('Invalid order ID.', 400, request);
+    try {
+      orderId = decodeURIComponent(path.slice(orderPrefix.length));
+    } catch {
+      return jsonError('Invalid order ID.', 400, request);
+    }
+
+    if (!orderId || orderId.includes('/')) {
+      return jsonError('Invalid order ID.', 400, request);
+    }
+
+    const visualOrder = await getVisualOrder(env, customer.id, orderId);
+
+    if (visualOrder) {
+      let delivery = null;
+
+      try {
+        delivery = visualOrder.delivery_json
+          ? JSON.parse(visualOrder.delivery_json)
+          : null;
+      } catch {}
+
+      delete visualOrder.delivery_json;
+
+      return respond({
+        ok: true,
+        order: customerSafeOrder(visualOrder),
+        delivery
+      }, 200, request);
+    }
+
     const order = await getSocialLogOrder(env, customer.id, orderId);
-    if (!order) return jsonError('Order not found.', 404, request);
+
+    if (!order) {
+      return jsonError('Order not found.', 404, request);
+    }
+
     let delivery = null;
-    try { delivery = order.delivery_json ? JSON.parse(order.delivery_json) : null; } catch {}
+
+    try {
+      delivery = order.delivery_json
+        ? JSON.parse(order.delivery_json)
+        : null;
+    } catch {}
+
     delete order.delivery_json;
-    return respond({ ok: true, order, delivery }, 200, request);
+
+    return respond({
+      ok: true,
+      order,
+      delivery
+    }, 200, request);
   }
   if (method !== 'POST' || !isPurchasePath) return jsonError('Method not allowed.', 405, request);
 
