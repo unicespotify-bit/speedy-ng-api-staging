@@ -1716,6 +1716,8 @@ async function confirmVisualProviderRefund(env, orderId, providerStatus, reason)
 }
 
 async function refundVisualOrder(env, customerId, orderId, reason) {
+  await ensureCustomerWallets(env, customerId);
+
   const order = await getVisualOrder(env, customerId, orderId);
   if (!order || !['processing', 'review'].includes(order.status)) return false;
   if (Number(order.provider_refund_confirmed || 0) !== 1) return false;
