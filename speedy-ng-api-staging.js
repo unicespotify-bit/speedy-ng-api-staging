@@ -2031,6 +2031,43 @@ try {
     { country, service }
   );
 } catch (error) {
+  if (error?.status === 429) {
+    const retryValue = Number(error.retryAfter);
+    const retrySeconds =
+      Number.isFinite(retryValue) && retryValue > 0
+        ? Math.min(retryValue, 300)
+        : 30;
+
+    const retryAt = Date.now() + retrySeconds * 1000;
+
+    YOUNGPG_CATALOGUE_CACHE.set(
+      '__youngpg_virtual_global_cooldown__',
+      { retryAt }
+    );
+
+    try {
+      await env.DB.prepare(`
+        INSERT INTO app_settings
+          (setting_key, setting_value, updated_at, updated_by)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(setting_key) DO UPDATE SET
+          setting_value = excluded.setting_value,
+          updated_at = excluded.updated_at,
+          updated_by = excluded.updated_by
+      `).bind(
+        'youngpg_virtual_cooldown_until',
+        String(retryAt),
+        new Date().toISOString(),
+        'system'
+      ).run();
+    } catch (dbError) {
+      console.error(
+        'Failed to save YoungPG purchase cooldown:',
+        dbError?.message || dbError
+      );
+    }
+  }
+
   return jsonError(
     providerErrorMessage(error),
     error?.status === 429 ? 429 : 502,
