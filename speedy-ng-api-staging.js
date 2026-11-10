@@ -1478,6 +1478,9 @@ async function ensureVisualOrderSchema(env) {
           catch (error) { if (!String(error.message).toLowerCase().includes('duplicate column')) throw error; }
         }
       }
+      await env.DB.prepare(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_visual_provider_id ON orders(provider, provider_order_id) WHERE provider_order_id IS NOT NULL'
+      ).run();
       await env.DB.prepare(`
   CREATE INDEX IF NOT EXISTS idx_orders_visual_refund_queue
   ON orders(created_at)
