@@ -1988,12 +1988,12 @@ if (!price) {
       if (!order.expires_at || Date.now() < Date.parse(order.expires_at)) {
         return respond({ ok: false, status: order.status, refund_available_at: order.expires_at, message: 'Your refund button becomes available when the countdown reaches zero.' }, 409, request);
       }
-      if (Number(order.provider_refund_confirmed || 0) !== 1) 
+      if (Number(order.provider_refund_confirmed || 0) !== 1) {
         await attemptVisualProviderCancellationSafely(env, order);
-        const latest = await getVisualOrder(env, customer.id, orderId);
-        if (latest?.status === 'completed') return respond({ ok: true, order: latest, refunded: false, message: 'Your SMS code arrived. This order is successful and cannot be refunded.' }, 200, request);
-        if (Number(latest?.provider_refund_confirmed || 0) !== 1) return respond({ ok: false, status: latest?.status || order.status, message: 'We are still waiting for the provider to confirm the cancellation. Your money remains protected.' }, 409, request);
       }
+      const latest = await getVisualOrder(env, customer.id, orderId);
+      if (latest?.status === 'completed') return respond({ ok: true, order: latest, refunded: false, message: 'Your SMS code arrived. This order is successful and cannot be refunded.' }, 200, request);
+      if (Number(latest?.provider_refund_confirmed || 0) !== 1) return respond({ ok: false, status: latest?.status || order.status, message: 'We are still waiting for the provider to confirm the cancellation. Your money remains protected.' }, 409, request);
       const refunded = await refundVisualOrder(env, customer.id, orderId, 'Customer requested refund after provider confirmation and countdown completion.');
       const updated = await getVisualOrder(env, customer.id, orderId);
       return respond({ ok: true, order: customerSafeOrder(updated), refunded, message: refunded ? 'Your refund has been added to your USD wallet.' : 'This order has already changed state or been refunded.' }, 200, request);
