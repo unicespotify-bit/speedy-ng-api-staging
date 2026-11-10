@@ -1968,13 +1968,31 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
       return respond({ ok: true, listing: providerEnvelope(result.data) }, 200, request);
     }
     if (path === visualPrefix + 'countries') {
-      const result = await youngpgVirtualCall(env, 'getCountries');
-      let countries = result.data;
-      if (typeof countries === 'string') { try { countries = JSON.parse(countries); } catch {} }
-      return respond({ ok: true, countries }, 200, request);
+  const result = await youngpgVirtualCachedCall(
+    env,
+    'getCountries',
+    {},
+    300000
+  );
+
+  let countries = result.data;
+
+  if (typeof countries === 'string') {
+    try {
+      countries = JSON.parse(countries);
+    } catch {}
+  }
+
+  return respond({ ok: true, countries }, 200, request);
     }
     if (path === visualPrefix + 'services') {
-  const result = await youngpgVirtualCall(env, 'getServicesList', {});
+  const result = await youngpgVirtualCachedCall(
+    env,
+    'getServicesList',
+    {},
+    300000
+  );
+
   let services = result.data;
 
   if (typeof services === 'string') {
@@ -1986,13 +2004,32 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
   return respond({ ok: true, services }, 200, request);
     }
     if (path === visualPrefix + 'catalogue') {
-      const country = url.searchParams.get('country');
-      const service = url.searchParams.get('service');
-      if (!country || !service) return jsonError('Country and service are required.', 400, request);
-      const result = await youngpgVirtualCall(env, 'getPrices', { country, service });
-      let prices = result.data;
-      if (typeof prices === 'string') { try { prices = JSON.parse(prices); } catch {} }
-      return respond({ ok: true, country, service, prices }, 200, request);
+  const country = String(url.searchParams.get('country') || '').trim();
+  const service = String(url.searchParams.get('service') || '').trim();
+
+  if (
+    !/^[a-zA-Z0-9_-]{1,40}$/.test(country) ||
+    !/^[a-zA-Z0-9_-]{1,40}$/.test(service)
+  ) {
+    return jsonError('Country and service are required.', 400, request);
+  }
+
+  const result = await youngpgVirtualCachedCall(
+    env,
+    'getPrices',
+    { country, service },
+    60000
+  );
+
+  let prices = result.data;
+
+  if (typeof prices === 'string') {
+    try {
+      prices = JSON.parse(prices);
+    } catch {}
+  }
+
+  return respond({ ok: true, country, service, prices }, 200, request);
     }
     if (path === visualPrefix + 'balance') {
       const result = await youngpgVirtualCall(env, 'getBalance');
