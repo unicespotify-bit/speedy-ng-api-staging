@@ -1683,13 +1683,22 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
   await ensureVisualOrderSchema(env);
 
   if (isQuote && method === 'GET') {
-    const country = String(url.searchParams.get('country') || '').trim();
-    const service = String(url.searchParams.get('service') || '').trim();
-    if (!/^[a-zA-Z0-9_-]{1,40}$/.test(country) || !/^[a-zA-Z0-9_-]{1,40}$/.test(service)) return jsonError('Choose a valid country and service.', 400, request);
-    let result;
-    try { result = await youngpgVirtualCall(env, 'getPrices', { country, service }); }
-    catch (error) { return jsonError(providerErrorMessage(error), error?.status === 429 ? 429 : 502, request); }
-    const price = visualPriceEntry(result.data, country, service);
+  const country = String(url.searchParams.get('country') || '').trim();
+  const countryName = String(url.searchParams.get('country_name') || country).trim();
+  const service = String(url.searchParams.get('service') || '').trim();
+
+  if (!/^[a-zA-Z0-9_-]{1,40}$/.test(country) || !/^[a-zA-Z0-9_-]{1,40}$/.test(service)) {
+    return jsonError('Choose a valid country and service.', 400, request);
+  }
+
+  let result;
+  try {
+    result = await youngpgVirtualCall(env, 'getPrices', { country, service });
+  } catch (error) {
+    return jsonError(providerErrorMessage(error), error?.status === 429 ? 429 : 502, request);
+  }
+
+  const price = visualPriceEntry(result.data, countryName, service, country);
 
 if (!price) {
   const raw = parseProviderJson(result.data);
