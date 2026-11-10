@@ -1846,6 +1846,31 @@ async function attemptVisualProviderCancellation(env, order) {
 
   return { confirmed: false, reason: cancelToken || 'provider_not_confirmed' };
 }
+async function attemptVisualProviderCancellationSafely(env, order) {
+  try {
+    return await attemptVisualProviderCancellation(env, order);
+  } catch (error) {
+    const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    try {
+      await env.DB.prepare(`
+        UPDATE orders
+        SET failure_reason=?, provider_cancel_retry_at=?, updated_at=?
+        WHERE id=? AND status IN ('processing','review')
+      `).bind(
+        'YoungPG connection or cancellation check failed. Retrying in five minutes.',
+        retryAt,
+        new Date().toISOString(),
+        order.id
+      ).run();
+    } catch (dbError) {
+      console.error('Could not save Visual Number retry cooldown:', dbError?.message || dbError);
+    }
+
+    console.error('YoungPG Visual Number cancellation check failed:', error?.message || error);
+    return { confirmed: false, reason: 'provider_check_error' };
+  }
+}
 
 async function visualRefundTimerDates(env, baseTime = Date.now()) {
   const customerSetting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='visual_number_customer_refund_seconds'").first();
