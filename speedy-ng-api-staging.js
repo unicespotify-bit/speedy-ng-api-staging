@@ -1489,6 +1489,10 @@ async function ensureVisualOrderSchema(env) {
     AND status IN ('processing','review')
     AND provider_order_id IS NOT NULL
 `).run();
+  })().catch(error => {
+      visualOrderSchemaReady = null;
+      throw error;
+    });
   }
   return visualOrderSchemaReady;
 }
