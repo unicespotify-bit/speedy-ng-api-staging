@@ -1478,8 +1478,14 @@ async function ensureVisualOrderSchema(env) {
           catch (error) { if (!String(error.message).toLowerCase().includes('duplicate column')) throw error; }
         }
       }
-      await env.DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_visual_provider_id ON orders(provider, provider_order_id) WHERE provider_order_id IS NOT NULL').run();
-    })().catch(error => { visualOrderSchemaReady = null; throw error; });
+      await env.DB.prepare(`
+  CREATE INDEX IF NOT EXISTS idx_orders_visual_refund_queue
+  ON orders(created_at)
+  WHERE category='visual_numbers'
+    AND provider='youngpg_virtual'
+    AND status IN ('processing','review')
+    AND provider_order_id IS NOT NULL
+`).run();
   }
   return visualOrderSchemaReady;
 }
