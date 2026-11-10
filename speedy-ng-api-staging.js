@@ -3506,7 +3506,7 @@ async function processExpiredVisualNumberOrders(env) {
     ELSE 2
   END ASC,
   created_at ASC
-LIMIT 100
+LIMIT 20
   `).all();
 
   let checked = 0;
