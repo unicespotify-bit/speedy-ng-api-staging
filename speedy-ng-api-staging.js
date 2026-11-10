@@ -2243,9 +2243,18 @@ if (!price) {
     provider_cancel_at=?, expires_at=?, updated_at=? WHERE id=? AND customer_id=? AND status='processing'`)
     .bind(providerId, phone, timerDates.providerCancelAt, timerDates.customerRefundAt, new Date(issuedAt).toISOString(), orderId, customer.id).run();
   const order = await getVisualOrder(env, customer.id, orderId);
-  if (order) delete order.delivery_json;
-  return respond({ ok: true, order: customerSafeOrder(order), message: 'Your number is ready. Check this order for incoming SMS codes.' }, 201, request);
+
+if (order) {
+  delete order.delivery_json;
+  order.phone_number = phone;
 }
+
+return respond({
+  ok: true,
+  order: customerSafeOrder(order),
+  phone_number: phone,
+  message: 'Your number is ready. Waiting for SMS verification code.'
+}, 201, request);
 
 async function youngpgCustomerRoutes(request, env, url, path, method) {
   const visualPrefix = '/api/customer/visual-numbers/';
