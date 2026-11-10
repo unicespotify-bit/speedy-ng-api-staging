@@ -2803,6 +2803,7 @@ function customerSafeOrder(order) {
     provider_service_code,
     provider_country_code,
     provider_cancel_at,
+    provider_cancel_retry_at,
     provider_refund_confirmed,
     provider_refund_at,
     provider_response_json,
