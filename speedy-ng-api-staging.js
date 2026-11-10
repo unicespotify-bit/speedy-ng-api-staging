@@ -1467,11 +1467,16 @@ async function ensureVisualOrderSchema(env) {
       const info = await env.DB.prepare('PRAGMA table_info(orders)').all();
       const columns = new Set((info.results || []).map(row => row.name));
       const additions = [
-        ['provider_phone', 'TEXT'], ['provider_service_code', 'TEXT'],
-        ['provider_country_code', 'TEXT'], ['provider_status', 'TEXT'], ['expires_at', 'TEXT'],
-        ['provider_cancel_at', 'TEXT'], ['provider_refund_confirmed', 'INTEGER NOT NULL DEFAULT 0'],
+        ['provider_phone', 'TEXT'],
+        ['provider_service_code', 'TEXT'],
+        ['provider_country_code', 'TEXT'],
+        ['provider_status', 'TEXT'],
+        ['expires_at', 'TEXT'],
+        ['provider_cancel_at', 'TEXT'],
+        ['provider_refund_confirmed', 'INTEGER NOT NULL DEFAULT 0'],
         ['provider_refund_at', 'TEXT'],
         ['provider_cancel_retry_at', 'TEXT']
+      ];
       for (const [name, definition] of additions) {
         if (!columns.has(name)) {
           try { await env.DB.prepare(`ALTER TABLE orders ADD COLUMN ${name} ${definition}`).run(); }
@@ -1824,6 +1829,7 @@ async function attemptVisualProviderCancellation(env, order) {
     return { confirmed: false, reason: 'awaiting_provider_cancellation_confirmation' };
   }
   const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
     await env.DB.prepare(`UPDATE orders SET provider_status=?, failure_reason=?, provider_cancel_retry_at=?, updated_at=? WHERE id=? AND status IN ('processing','review')`)
       .bind(
         finalToken.slice(0, 120),
@@ -1832,8 +1838,22 @@ async function attemptVisualProviderCancellation(env, order) {
         new Date().toISOString(),
         order.id
       ).run();
+
+    return { confirmed: false, reason: 'awaiting_provider_cancellation_confirmation' };
+  }
+
+  const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+  await env.DB.prepare(`UPDATE orders SET provider_status=?, failure_reason=?, provider_cancel_retry_at=?, updated_at=? WHERE id=? AND status IN ('processing','review')`)
+    .bind(
+      cancelToken.slice(0, 120),
+      'Provider cancellation is not confirmed yet. Customer funds remain reserved.',
+      retryAt,
+      new Date().toISOString(),
+      order.id
+    ).run();
+
   return { confirmed: false, reason: cancelToken || 'provider_not_confirmed' };
-}
 
 async function visualRefundTimerDates(env, baseTime = Date.now()) {
   const customerSetting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='visual_number_customer_refund_seconds'").first();
