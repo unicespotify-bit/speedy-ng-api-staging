@@ -2004,12 +2004,29 @@ if (!countryName) {
   );
 }
 const cooldownKey = '__youngpg_virtual_global_cooldown__';
-const savedCooldown = await env.DB.prepare(
-  'SELECT setting_value FROM app_settings WHERE setting_key = ?'
-).bind('youngpg_virtual_cooldown_until').first();
+
+let savedCooldown;
+
+try {
+  savedCooldown = await env.DB.prepare(
+    'SELECT setting_value FROM app_settings WHERE setting_key = ?'
+  ).bind('youngpg_virtual_cooldown_until').first();
+} catch (error) {
+  console.error(
+    'YoungPG purchase cooldown check failed:',
+    error?.message || error
+  );
+
+  return jsonError(
+    'Number purchasing is temporarily unavailable. Please try again shortly. No funds were taken.',
+    503,
+    request
+  );
+}
 
 const sharedRetryAt = Number(savedCooldown?.setting_value || 0);
 const localCooldown = YOUNGPG_CATALOGUE_CACHE.get(cooldownKey);
+
 const retryAt = Math.max(
   sharedRetryAt,
   Number(localCooldown?.retryAt || 0)
@@ -2021,7 +2038,7 @@ if (Number.isFinite(retryAt) && retryAt > Date.now()) {
     429,
     request
   );
-                             }
+}
 let quoteResponse;
 
 try {
