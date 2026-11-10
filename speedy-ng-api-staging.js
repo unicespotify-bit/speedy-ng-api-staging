@@ -1470,8 +1470,8 @@ async function ensureVisualOrderSchema(env) {
         ['provider_phone', 'TEXT'], ['provider_service_code', 'TEXT'],
         ['provider_country_code', 'TEXT'], ['provider_status', 'TEXT'], ['expires_at', 'TEXT'],
         ['provider_cancel_at', 'TEXT'], ['provider_refund_confirmed', 'INTEGER NOT NULL DEFAULT 0'],
-        ['provider_refund_at', 'TEXT']
-      ];
+        ['provider_refund_at', 'TEXT'],
+        ['provider_cancel_retry_at', 'TEXT']
       for (const [name, definition] of additions) {
         if (!columns.has(name)) {
           try { await env.DB.prepare(`ALTER TABLE orders ADD COLUMN ${name} ${definition}`).run(); }
@@ -1759,6 +1759,12 @@ async function attemptVisualProviderCancellation(env, order) {
   if (!order?.provider_order_id || !order.id) return { confirmed: false, reason: 'missing_provider_reference' };
   const now = Date.now();
   if (Number(order.provider_refund_confirmed || 0) === 1) return { confirmed: true, reason: 'already_confirmed' };
+  if (
+    order.provider_cancel_retry_at &&
+    Date.parse(order.provider_cancel_retry_at) > now
+  ) {
+    return { confirmed: false, reason: 'retry_cooldown' };
+  }
   // Poll for a code throughout the rental, not only near expiry. A delivered code always wins over cancellation.
   const statusResponse = await youngpgVirtualCall(env, 'getStatus', { id: order.provider_order_id });
   const token = String(statusResponse.data || '').trim();
@@ -1806,12 +1812,26 @@ async function attemptVisualProviderCancellation(env, order) {
     }
     // ACCESS_CANCEL from setStatus is not enough on its own for customer
     // credit: wait for getStatus to independently report STATUS_CANCEL.
-    await env.DB.prepare(`UPDATE orders SET provider_status=?, failure_reason=?, updated_at=? WHERE id=? AND status IN ('processing','review')`)
-      .bind(finalToken.slice(0, 120), 'Cancellation was requested, but the provider has not yet independently confirmed the cancelled status. Customer funds remain protected.', new Date().toISOString(), order.id).run();
+    const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  await env.DB.prepare(`UPDATE orders SET provider_status=?, failure_reason=?, provider_cancel_retry_at=?, updated_at=? WHERE id=? AND status IN ('processing','review')`)
+    .bind(
+      cancelToken.slice(0, 120),
+      'Provider cancellation is not confirmed yet. Customer funds remain reserved.',
+      retryAt,
+      new Date().toISOString(),
+      order.id
+    ).run();
     return { confirmed: false, reason: 'awaiting_provider_cancellation_confirmation' };
   }
-  await env.DB.prepare('UPDATE orders SET provider_status=?, failure_reason=?, updated_at=? WHERE id=? AND status IN (\'processing\',\'review\')')
-    .bind(cancelToken.slice(0, 120), 'Provider cancellation is not confirmed yet. Customer funds remain reserved.', new Date().toISOString(), order.id).run();
+  const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    await env.DB.prepare(`UPDATE orders SET provider_status=?, failure_reason=?, provider_cancel_retry_at=?, updated_at=? WHERE id=? AND status IN ('processing','review')`)
+      .bind(
+        finalToken.slice(0, 120),
+        'Cancellation is awaiting provider confirmation. Customer funds remain protected.',
+        retryAt,
+        new Date().toISOString(),
+        order.id
+      ).run();
   return { confirmed: false, reason: cancelToken || 'provider_not_confirmed' };
 }
 
@@ -3486,8 +3506,8 @@ async function processExpiredVisualNumberOrders(env) {
   await ensureVisualOrderSchema(env);
 
   const due = await env.DB.prepare(`
-    SELECT id, customer_id, provider_order_id, provider_phone,
-      provider_cancel_at, expires_at, provider_refund_confirmed, status
+    provider_cancel_at, expires_at, provider_refund_confirmed,
+      provider_cancel_retry_at, status
     FROM orders
     WHERE category='visual_numbers'
       AND provider='youngpg_virtual'
