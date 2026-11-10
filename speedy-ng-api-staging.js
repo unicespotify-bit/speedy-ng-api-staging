@@ -3526,7 +3526,8 @@ async function processExpiredVisualNumberOrders(env) {
   await ensureVisualOrderSchema(env);
 
   const due = await env.DB.prepare(`
-    provider_cancel_at, expires_at, provider_refund_confirmed,
+    SELECT id, customer_id, provider_order_id, provider_phone,
+      provider_cancel_at, expires_at, provider_refund_confirmed,
       provider_cancel_retry_at, status
     FROM orders
     WHERE category='visual_numbers'
