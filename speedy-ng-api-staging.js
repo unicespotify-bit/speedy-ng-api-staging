@@ -1581,7 +1581,78 @@ function visualPriceEntry(raw, country, service, countryId = country) {
 
   return null;
 }
+async function visualCountryName(env, countryId) {
+  const result = await youngpgVirtualCachedCall(
+    env,
+    'getCountries',
+    {},
+    300000
+  );
 
+  const root = providerEnvelope(
+    parseProviderJson(result.data)
+  );
+
+  const source =
+    root?.countries ??
+    root?.data ??
+    root;
+
+  const getName = row => {
+    if (!row || typeof row !== 'object') return null;
+
+    return String(
+      row.name ??
+      row.country_name ??
+      row.countryName ??
+      row.eng ??
+      row.en ??
+      row.english_name ??
+      row.title ??
+      ''
+    ).trim() || null;
+  };
+
+  if (Array.isArray(source)) {
+    const match = source.find(row => {
+      const id = String(
+        row?.id ??
+        row?.country_id ??
+        row?.countryId ??
+        row?.code ??
+        row?.iso ??
+        row?.slug ??
+        ''
+      ).trim();
+
+      return id === String(countryId).trim();
+    });
+
+    return getName(match);
+  }
+
+  if (source && typeof source === 'object') {
+    for (const [key, row] of Object.entries(source)) {
+      const id = String(
+        row?.id ??
+        row?.country_id ??
+        row?.countryId ??
+        row?.code ??
+        row?.iso ??
+        row?.slug ??
+        key
+      ).trim();
+
+      if (id === String(countryId).trim()) {
+        return typeof row === 'string'
+          ? row.trim()
+          : getName(row);
+      }
+    }
+  }
+
+  return null;
+}
 async function visualMarkup(env, country, service) {
   const result = await env.DB.prepare(`SELECT markup_type, markup_value FROM pricing_rules WHERE active=1
     AND provider IN ('youngpg_virtual','*') AND product IN ('visual_numbers','*')
@@ -1879,11 +1950,56 @@ if (!price) {
     return respond({ ok: true, duplicate_request: true, order: customerSafeOrder(existing), delivery }, 200, request);
   }
 
-  let quoteResponse;
-  try { quoteResponse = await youngpgVirtualCall(env, 'getPrices', { country, service }); }
-  catch (error) { return jsonError(providerErrorMessage(error), error?.status === 429 ? 429 : 502, request); }
-  const price = visualPriceEntry(quoteResponse.data, country, service);
-  if (!price) return jsonError('The live provider price could not be verified. No funds were taken.', 502, request);
+  let countryName;
+
+try {
+  countryName = await visualCountryName(env, country);
+} catch (error) {
+  return jsonError(
+    providerErrorMessage(error),
+    error?.status === 429 ? 429 : 502,
+    request
+  );
+}
+
+if (!countryName) {
+  return jsonError(
+    'The selected country could not be verified. No funds were taken.',
+    400,
+    request
+  );
+}
+
+let quoteResponse;
+
+try {
+  quoteResponse = await youngpgVirtualCall(
+    env,
+    'getPrices',
+    { country, service }
+  );
+} catch (error) {
+  return jsonError(
+    providerErrorMessage(error),
+    error?.status === 429 ? 429 : 502,
+    request
+  );
+}
+
+const price = visualPriceEntry(
+  quoteResponse.data,
+  countryName,
+  service,
+  country
+);
+
+if (!price) {
+  return jsonError(
+    'The live provider price could not be verified. No funds were taken.',
+    502,
+    request
+  );
+}
   if (price.stock !== null && price.stock < 1) return jsonError('This service is currently out of stock. No funds were taken.', 409, request);
   const setting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='usd_ngn_rate'").first();
   const rate = Number(setting?.setting_value || 1500);
