@@ -340,7 +340,7 @@ async function processFlutterwaveWebhook(request, env) {
 
   const data = payload?.data || {};
   const webhookId = String(payload.id || payload.webhook_id || `evt-${await hash(rawBody)}`).slice(0, 200);
-  const eventType = String(payload.type || payload.event_type || "unknown").slice(0, 100);
+  const eventType = String(payload.type || payload.event_type || payload.event || "unknown").slice(0, 100);
   const reference = String(data.reference || data.tx_ref || data.meta?.reference || "").slice(0, 100);
   const chargeId = String(data.id || "").slice(0, 100);
   const now = new Date().toISOString();
