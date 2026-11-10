@@ -1690,7 +1690,33 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
     try { result = await youngpgVirtualCall(env, 'getPrices', { country, service }); }
     catch (error) { return jsonError(providerErrorMessage(error), error?.status === 429 ? 429 : 502, request); }
     const price = visualPriceEntry(result.data, country, service);
-    if (!price) return jsonError('The provider price format could not be verified. No purchase is available for this selection yet.', 502, request);
+
+if (!price) {
+  const raw = parseProviderJson(result.data);
+  const root = providerEnvelope(raw);
+
+  console.warn('[SPEEDY_VISUAL_QUOTE_PARSE_MISS]', JSON.stringify({
+    country,
+    service,
+    responseType: typeof root,
+    responseIsArray: Array.isArray(root),
+    responseKeys: root && typeof root === 'object'
+      ? Object.keys(root).slice(0, 30)
+      : [],
+    countryKeys: root && typeof root === 'object'
+      ? Object.keys(root[country] || {}).slice(0, 30)
+      : [],
+    serviceKeys: root && typeof root === 'object'
+      ? Object.keys(root[service] || {}).slice(0, 30)
+      : []
+  }));
+
+  return jsonError(
+    'The provider price format could not be verified. No purchase is available for this selection yet.',
+    502,
+    request
+  );
+}
     const setting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='usd_ngn_rate'").first();
     const rate = Number(setting?.setting_value || 1500);
     if (!Number.isFinite(rate) || rate <= 0) return jsonError('The NGN/USD exchange rate is not configured.', 503, request);
