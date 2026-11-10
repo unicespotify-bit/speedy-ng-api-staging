@@ -1988,8 +1988,8 @@ if (!price) {
       if (!order.expires_at || Date.now() < Date.parse(order.expires_at)) {
         return respond({ ok: false, status: order.status, refund_available_at: order.expires_at, message: 'Your refund button becomes available when the countdown reaches zero.' }, 409, request);
       }
-      if (Number(order.provider_refund_confirmed || 0) !== 1) {
-        try { await attemptVisualProviderCancellation(env, order); } catch (error) { console.error('Provider cancellation check deferred:', error?.message || error); }
+      if (Number(order.provider_refund_confirmed || 0) !== 1) 
+        await attemptVisualProviderCancellationSafely(env, order);
         const latest = await getVisualOrder(env, customer.id, orderId);
         if (latest?.status === 'completed') return respond({ ok: true, order: latest, refunded: false, message: 'Your SMS code arrived. This order is successful and cannot be refunded.' }, 200, request);
         if (Number(latest?.provider_refund_confirmed || 0) !== 1) return respond({ ok: false, status: latest?.status || order.status, message: 'We are still waiting for the provider to confirm the cancellation. Your money remains protected.' }, 409, request);
@@ -2004,7 +2004,7 @@ if (!price) {
       await env.DB.prepare("UPDATE orders SET provider_status=?, updated_at=? WHERE id=? AND customer_id=? AND status IN ('processing','review')")
         .bind(token, new Date().toISOString(), orderId, customer.id).run();
       if (order.provider_cancel_at && Date.now() >= Date.parse(order.provider_cancel_at)) {
-        try { const result = await attemptVisualProviderCancellation(env, order); const latest = await getVisualOrder(env, customer.id, orderId);
+        try { const result = await attemptVisualProviderCancellationSafely(env, order); const latest = await getVisualOrder(env, customer.id, orderId);
           if (result.completed || latest?.status === 'completed') return respond({ ok: true, status: 'completed', order: customerSafeOrder(latest), message: 'Your SMS code arrived. This order is successful.' }, 200, request);
           return respond({ ok: true, status: 'waiting', provider_refund_confirmed: Number(latest?.provider_refund_confirmed || 0) === 1, refund_available: Boolean(latest?.expires_at && Date.now() >= Date.parse(latest.expires_at) && Number(latest?.provider_refund_confirmed || 0) === 1), order: customerSafeOrder(latest), message: Number(latest?.provider_refund_confirmed || 0) === 1 ? 'Provider cancellation confirmed. Refund unlocks when the countdown reaches zero.' : 'The provider cancellation is being checked.' }, 200, request);
         } catch (error) { console.error('Scheduled provider cancellation check failed:', error?.message || error); }
@@ -3597,7 +3597,7 @@ LIMIT 20
         continue;
       }
 
-      const result = await attemptVisualProviderCancellation(env, order);
+      const result = await attemptVisualProviderCancellationSafely(env, order);
 
       if (result.confirmed) providerConfirmed++;
       else if (result.completed) completed++;
