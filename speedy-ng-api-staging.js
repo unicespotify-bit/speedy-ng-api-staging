@@ -3493,6 +3493,11 @@ async function processExpiredVisualNumberOrders(env) {
       AND provider='youngpg_virtual'
       AND status IN ('processing','review')
       AND provider_order_id IS NOT NULL
+      AND (
+        COALESCE(provider_refund_confirmed, 0) = 1
+        OR provider_cancel_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        OR expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      )
     ORDER BY
   CASE
     WHEN COALESCE(provider_refund_confirmed, 0) = 1 THEN 0
