@@ -1692,13 +1692,18 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
   }
 
   let result;
-  try {
-    result = await youngpgVirtualCall(env, 'getPrices', { country, service });
-  } catch (error) {
-    return jsonError(providerErrorMessage(error), error?.status === 429 ? 429 : 502, request);
-  }
+try {
+  result = await youngpgVirtualCachedCall(
+    env,
+    'getPrices',
+    { country, service },
+    60000
+  );
+} catch (error) {
+  return jsonError(providerErrorMessage(error), error?.status === 429 ? 429 : 502, request);
+}
 
-  const price = visualPriceEntry(result.data, countryName, service, country);
+const price = visualPriceEntry(result.data, countryName, service, country);
 
 if (!price) {
   const raw = parseProviderJson(result.data);
