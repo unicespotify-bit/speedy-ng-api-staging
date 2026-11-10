@@ -2818,24 +2818,29 @@ async function refundNexarBoostOrder(env, customerId, orderId, amountMinor, reas
   return Number(result[0]?.meta?.changes || 0) === 1;
 }
 function customerSafeOrder(order) {
-  if (!order) return order;
+if (!order) return order;
 
-  const {
-    provider,
-    provider_order_id,
-    provider_phone,
-    provider_status,
-    provider_service_code,
-    provider_country_code,
-    provider_cancel_at,
-    provider_cancel_retry_at,
-    provider_refund_confirmed,
-    provider_refund_at,
-    provider_response_json,
-    ...safeOrder
-  } = order;
+const {
+provider,
+provider_order_id,
+provider_phone,
+provider_status,
+provider_service_code,
+provider_country_code,
+provider_cancel_at,
+provider_cancel_retry_at,
+provider_refund_confirmed,
+provider_refund_at,
+provider_response_json,
+...safeOrder
+} = order;
 
-  return safeOrder;
+return {
+...safeOrder,
+...(order.category === 'visual_numbers' && provider_phone
+? { phone_number: provider_phone }
+: {})
+};
 }
 async function nexarSocialBoostPurchase(request, env, url) {
   const customer = await getCustomer(request, env);
