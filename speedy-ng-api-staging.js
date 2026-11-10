@@ -2255,7 +2255,7 @@ return respond({
   phone_number: phone,
   message: 'Your number is ready. Waiting for SMS verification code.'
 }, 201, request);
-
+}
 async function youngpgCustomerRoutes(request, env, url, path, method) {
   const visualPrefix = '/api/customer/visual-numbers/';
   const logsPrefix = '/api/customer/social-logs/';
