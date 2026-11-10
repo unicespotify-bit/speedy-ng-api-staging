@@ -1082,30 +1082,52 @@ async function youngpgVirtualCall(env, action, params = {}) {
 async function youngpgVirtualCachedCall(env, action, params = {}, ttlMs = 60000) {
   const key = JSON.stringify([action, params]);
   const cooldownKey = '__youngpg_virtual_global_cooldown__';
+  const settingKey = 'youngpg_virtual_cooldown_until';
   const now = Date.now();
 
   const cached = YOUNGPG_CATALOGUE_CACHE.get(key);
 
-  // Return a successful cached response while it is still valid.
   if (cached?.value && cached.expiresAt > now) {
     return cached.value;
   }
 
-  // Avoid duplicate simultaneous requests for the same data.
   if (cached?.pending) {
     return cached.pending;
   }
 
-  // Check whether YoungPG has recently rate-limited this API.
-  const cooldown = YOUNGPG_CATALOGUE_CACHE.get(cooldownKey);
+  const localCooldown = YOUNGPG_CATALOGUE_CACHE.get(cooldownKey);
 
-  if (cooldown?.retryAt > now) {
+  if (localCooldown?.retryAt > now) {
     const error = new Error('YoungPG rate limit cooldown is active.');
     error.status = 429;
     error.retryAfter = String(
-      Math.max(1, Math.ceil((cooldown.retryAt - now) / 1000))
+      Math.max(1, Math.ceil((localCooldown.retryAt - now) / 1000))
     );
     throw error;
+  }
+
+  try {
+    const savedCooldown = await env.DB.prepare(
+      'SELECT setting_value FROM app_settings WHERE setting_key = ?'
+    ).bind(settingKey).first();
+
+    const sharedRetryAt = Number(savedCooldown?.setting_value || 0);
+
+    if (Number.isFinite(sharedRetryAt) && sharedRetryAt > now) {
+      YOUNGPG_CATALOGUE_CACHE.set(cooldownKey, {
+        retryAt: sharedRetryAt
+      });
+
+      const error = new Error('YoungPG rate limit cooldown is active.');
+      error.status = 429;
+      error.retryAfter = String(
+        Math.max(1, Math.ceil((sharedRetryAt - now) / 1000))
+      );
+      throw error;
+    }
+  } catch (error) {
+    if (error?.status === 429) throw error;
+    console.error('YoungPG shared cooldown check failed:', error?.message || error);
   }
 
   const pending = youngpgVirtualCall(env, action, params)
@@ -1115,21 +1137,9 @@ async function youngpgVirtualCachedCall(env, action, params = {}, ttlMs = 60000)
         expiresAt: Date.now() + ttlMs
       });
 
-      if (YOUNGPG_CATALOGUE_CACHE.size > 200) {
-        for (const [cacheKey, entry] of YOUNGPG_CATALOGUE_CACHE) {
-          if (
-            cacheKey !== cooldownKey &&
-            !entry.pending &&
-            entry.expiresAt <= Date.now()
-          ) {
-            YOUNGPG_CATALOGUE_CACHE.delete(cacheKey);
-          }
-        }
-      }
-
       return result;
     })
-    .catch(error => {
+    .catch(async error => {
       YOUNGPG_CATALOGUE_CACHE.delete(key);
 
       if (error?.status === 429) {
@@ -1139,9 +1149,33 @@ async function youngpgVirtualCachedCall(env, action, params = {}, ttlMs = 60000)
             ? Math.min(retryValue, 300)
             : 30;
 
+        const retryAt = Date.now() + retrySeconds * 1000;
+
         YOUNGPG_CATALOGUE_CACHE.set(cooldownKey, {
-          retryAt: Date.now() + retrySeconds * 1000
+          retryAt
         });
+
+        try {
+          await env.DB.prepare(`
+            INSERT INTO app_settings
+              (setting_key, setting_value, updated_at, updated_by)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(setting_key) DO UPDATE SET
+              setting_value = excluded.setting_value,
+              updated_at = excluded.updated_at,
+              updated_by = excluded.updated_by
+          `).bind(
+            settingKey,
+            String(retryAt),
+            new Date().toISOString(),
+            'system'
+          ).run();
+        } catch (dbError) {
+          console.error(
+            'YoungPG shared cooldown save failed:',
+            dbError?.message || dbError
+          );
+        }
 
         error.retryAfter = String(retrySeconds);
       }
