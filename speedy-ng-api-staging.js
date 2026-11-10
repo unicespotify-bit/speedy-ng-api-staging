@@ -1461,7 +1461,6 @@ function visualPriceEntry(raw, country, service, countryId = country) {
 
   add(findKey(serviceNode, country));
   add(findKey(serviceNode, countryId));
-  add(serviceNode);
 
   if (Array.isArray(root)) {
     for (const item of root) {
