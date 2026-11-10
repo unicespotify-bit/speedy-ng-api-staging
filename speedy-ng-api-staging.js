@@ -1818,17 +1818,6 @@ async function attemptVisualProviderCancellation(env, order) {
     // ACCESS_CANCEL from setStatus is not enough on its own for customer
     // credit: wait for getStatus to independently report STATUS_CANCEL.
     const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-  await env.DB.prepare(`UPDATE orders SET provider_status=?, failure_reason=?, provider_cancel_retry_at=?, updated_at=? WHERE id=? AND status IN ('processing','review')`)
-    .bind(
-      cancelToken.slice(0, 120),
-      'Provider cancellation is not confirmed yet. Customer funds remain reserved.',
-      retryAt,
-      new Date().toISOString(),
-      order.id
-    ).run();
-    return { confirmed: false, reason: 'awaiting_provider_cancellation_confirmation' };
-  }
-  const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
     await env.DB.prepare(`UPDATE orders SET provider_status=?, failure_reason=?, provider_cancel_retry_at=?, updated_at=? WHERE id=? AND status IN ('processing','review')`)
       .bind(
@@ -1854,6 +1843,7 @@ async function attemptVisualProviderCancellation(env, order) {
     ).run();
 
   return { confirmed: false, reason: cancelToken || 'provider_not_confirmed' };
+}
 
 async function visualRefundTimerDates(env, baseTime = Date.now()) {
   const customerSetting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='visual_number_customer_refund_seconds'").first();
