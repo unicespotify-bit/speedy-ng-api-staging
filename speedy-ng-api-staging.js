@@ -1077,39 +1077,75 @@ async function youngpgVirtualCall(env, action, params = {}) {
   for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   return providerFetch(url.toString());
 }
-// Cache successful read-only YoungPG catalogue requests.
+// Cache successful read-only YoungPG catalogue requests
+// and temporarily pause requests after a provider rate limit.
 async function youngpgVirtualCachedCall(env, action, params = {}, ttlMs = 60000) {
   const key = JSON.stringify([action, params]);
+  const cooldownKey = '__youngpg_virtual_global_cooldown__';
   const now = Date.now();
+
   const cached = YOUNGPG_CATALOGUE_CACHE.get(key);
 
+  // Return a successful cached response while it is still valid.
   if (cached?.value && cached.expiresAt > now) {
     return cached.value;
   }
 
+  // Avoid duplicate simultaneous requests for the same data.
   if (cached?.pending) {
     return cached.pending;
+  }
+
+  // Check whether YoungPG has recently rate-limited this API.
+  const cooldown = YOUNGPG_CATALOGUE_CACHE.get(cooldownKey);
+
+  if (cooldown?.retryAt > now) {
+    const error = new Error('YoungPG rate limit cooldown is active.');
+    error.status = 429;
+    error.retryAfter = String(
+      Math.max(1, Math.ceil((cooldown.retryAt - now) / 1000))
+    );
+    throw error;
   }
 
   const pending = youngpgVirtualCall(env, action, params)
     .then(result => {
       YOUNGPG_CATALOGUE_CACHE.set(key, {
-  value: result,
-  expiresAt: Date.now() + ttlMs
-});
+        value: result,
+        expiresAt: Date.now() + ttlMs
+      });
 
-if (YOUNGPG_CATALOGUE_CACHE.size > 200) {
-  for (const [cacheKey, entry] of YOUNGPG_CATALOGUE_CACHE) {
-    if (!entry.pending && entry.expiresAt <= Date.now()) {
-      YOUNGPG_CATALOGUE_CACHE.delete(cacheKey);
-    }
-  }
-}
+      if (YOUNGPG_CATALOGUE_CACHE.size > 200) {
+        for (const [cacheKey, entry] of YOUNGPG_CATALOGUE_CACHE) {
+          if (
+            cacheKey !== cooldownKey &&
+            !entry.pending &&
+            entry.expiresAt <= Date.now()
+          ) {
+            YOUNGPG_CATALOGUE_CACHE.delete(cacheKey);
+          }
+        }
+      }
 
-return result;
+      return result;
     })
     .catch(error => {
       YOUNGPG_CATALOGUE_CACHE.delete(key);
+
+      if (error?.status === 429) {
+        const retryValue = Number(error.retryAfter);
+        const retrySeconds =
+          Number.isFinite(retryValue) && retryValue > 0
+            ? Math.min(retryValue, 300)
+            : 30;
+
+        YOUNGPG_CATALOGUE_CACHE.set(cooldownKey, {
+          retryAt: Date.now() + retrySeconds * 1000
+        });
+
+        error.retryAfter = String(retrySeconds);
+      }
+
       throw error;
     });
 
