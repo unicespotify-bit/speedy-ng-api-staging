@@ -1408,7 +1408,229 @@ if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
       return jsonError("Flutterwave could not confirm the bank-account creation. The deposit is held for reconciliation; do not transfer unless account details are displayed.", 502, request);
     }
   }
+  if (method === "POST" && path === "/api/customer/wallet/card/authorize") {
+    const body = await readBody(request);
 
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return jsonError("Invalid authorization request.", 400, request);
+    }
+
+    if (!(await allowAuthAttempt(
+      env,
+      request,
+      "card-authorization",
+      customer.id,
+      10,
+      15 * 60 * 1000
+    ))) {
+      return jsonError(
+        "Too many card authorization attempts. Please try again later.",
+        429,
+        request
+      );
+    }
+
+    const reference = String(body.reference || "").trim();
+    const authType = String(body.authorization_type || "")
+      .trim()
+      .toLowerCase();
+
+    if (!/^SPD-[A-Za-z0-9-]{10,80}$/.test(reference)) {
+      return jsonError("Invalid deposit reference.", 400, request);
+    }
+
+    if (!["pin", "otp", "avs"].includes(authType)) {
+      return jsonError("Unsupported card authorization type.", 400, request);
+    }
+
+    const deposit = await env.DB.prepare(`
+      SELECT id, provider_reference, provider_charge_id,
+             payment_method, status, provider_payload_json
+      FROM wallet_deposits
+      WHERE provider_reference = ?
+        AND customer_id = ?
+        AND provider = 'flutterwave'
+      LIMIT 1
+    `).bind(reference, customer.id).first();
+
+    if (
+      !deposit ||
+      deposit.payment_method !== "card" ||
+      deposit.status !== "pending" ||
+      !deposit.provider_charge_id
+    ) {
+      return jsonError(
+        "No matching pending card payment was found.",
+        404,
+        request
+      );
+    }
+
+    let savedResponse;
+
+    try {
+      savedResponse = JSON.parse(deposit.provider_payload_json || "{}");
+    } catch {
+      return jsonError(
+        "Card payment information could not be verified.",
+        409,
+        request
+      );
+    }
+
+    const nextAction = savedResponse?.data?.next_action || {};
+
+    const requiredAction = String(
+      nextAction.type ||
+      (
+        nextAction.requires_pin ? "requires_pin" :
+        nextAction.requires_otp ? "requires_otp" :
+        nextAction.requires_additional_fields ? "requires_additional_fields" :
+        ""
+      )
+    ).toLowerCase();
+
+    const actionMatches =
+      (authType === "pin" && requiredAction === "requires_pin") ||
+      (authType === "otp" && requiredAction === "requires_otp") ||
+      (authType === "avs" && requiredAction === "requires_additional_fields");
+
+    if (!actionMatches) {
+      return jsonError(
+        "This card payment is not requesting that authorization method.",
+        409,
+        request
+      );
+    }
+
+    let authorization;
+
+    if (authType === "pin") {
+      const encryptedPin = String(body.encrypted_pin || "");
+      const nonce = String(body.nonce || "");
+
+      if (
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(encryptedPin) ||
+        encryptedPin.length > 2048 ||
+        !/^[A-Za-z0-9]{12}$/.test(nonce)
+      ) {
+        return jsonError(
+          "Invalid encrypted card PIN information.",
+          400,
+          request
+        );
+      }
+
+      authorization = {
+        type: "pin",
+        pin: {
+          nonce,
+          encrypted_pin: encryptedPin
+        }
+      };
+    }
+
+    if (authType === "otp") {
+      const otp = String(body.otp || "").trim();
+
+      if (!/^\d{4,8}$/.test(otp)) {
+        return jsonError("Enter a valid OTP.", 400, request);
+      }
+
+      authorization = {
+        type: "otp",
+        otp: {
+          code: otp
+        }
+      };
+    }
+
+    if (authType === "avs") {
+      const suppliedAddress = body.address || {};
+
+      const address = {
+        city: String(suppliedAddress.city || "").trim(),
+        country: String(suppliedAddress.country || "").trim().toUpperCase(),
+        line1: String(suppliedAddress.line1 || "").trim(),
+        line2: String(suppliedAddress.line2 || "").trim(),
+        postal_code: String(suppliedAddress.postal_code || "").trim(),
+        state: String(suppliedAddress.state || "").trim()
+      };
+
+      if (
+        !address.city ||
+        !/^[A-Z]{2}$/.test(address.country) ||
+        !address.line1 ||
+        !address.postal_code ||
+        !address.state ||
+        Object.values(address).some(value => value.length > 150)
+      ) {
+        return jsonError(
+          "Complete the required card billing address fields.",
+          400,
+          request
+        );
+      }
+
+      authorization = {
+        type: "avs",
+        avs: { address }
+      };
+    }
+
+    const accessToken = await flutterwaveAccessToken(env);
+
+    const authorizationResponse = await flwV4Request(
+      env,
+      accessToken,
+      `/charges/${encodeURIComponent(deposit.provider_charge_id)}`,
+      {
+        method: "PUT",
+        idempotencyKey:
+          `spd-card-auth-${reference}-${token().slice(0, 12)}`,
+        body: { authorization }
+      }
+    );
+
+    const updatedCharge = authorizationResponse?.data || {};
+
+    const savedAuthorization = await env.DB.prepare(`
+      UPDATE wallet_deposits
+      SET provider_payload_json = ?,
+          updated_at = ?
+      WHERE id = ?
+        AND customer_id = ?
+        AND payment_method = 'card'
+        AND status = 'pending'
+        AND credited_at IS NULL
+        AND provider_charge_id = ?
+    `).bind(
+      JSON.stringify(authorizationResponse).slice(0, 100000),
+      new Date().toISOString(),
+      deposit.id,
+      customer.id,
+      deposit.provider_charge_id
+    ).run();
+
+    if (Number(savedAuthorization?.meta?.changes || 0) !== 1) {
+      return jsonError(
+        "Card authorization could not be saved. Check the payment status before trying again.",
+        409,
+        request
+      );
+    }
+
+    return respond({
+      ok: true,
+      reference,
+      chargeId: String(deposit.provider_charge_id),
+      status: String(updatedCharge.status || "pending"),
+      nextAction: updatedCharge.next_action || null,
+      redirectUrl:
+        updatedCharge?.next_action?.redirect_url?.url || null,
+      message: "Card authorization was submitted. Wallet credit is pending verified payment confirmation."
+    }, 200, request);
+        }
   if (method === "POST" && path === "/api/customer/wallet/convert") {
     const body = await readBody(request);
     if (!body) return jsonError("Invalid JSON.", 400, request);
