@@ -1518,7 +1518,8 @@ async function ensureVisualOrderSchema(env) {
         ['provider_cancel_at', 'TEXT'],
         ['provider_refund_confirmed', 'INTEGER NOT NULL DEFAULT 0'],
         ['provider_refund_at', 'TEXT'],
-        ['provider_cancel_retry_at', 'TEXT']
+        ['provider_cancel_retry_at', 'TEXT'],
+['provider_last_status_check_at', 'TEXT']
       ];
       for (const [name, definition] of additions) {
         if (!columns.has(name)) {
@@ -1767,6 +1768,29 @@ async function getVisualOrder(env, customerId, orderId) {
     failure_reason, created_at, updated_at, delivery_json
     FROM orders WHERE id=? AND customer_id=? AND category='visual_numbers'`).bind(orderId, customerId).first();
 }
+async function claimVisualProviderStatusCheck(env, orderId, cooldownSeconds = 45) {
+  const now = new Date().toISOString();
+
+  const result = await env.DB.prepare(`
+    UPDATE orders
+    SET provider_last_status_check_at=?
+    WHERE id=?
+      AND category='visual_numbers'
+      AND provider='youngpg_virtual'
+      AND status IN ('processing','review')
+      AND (
+        provider_last_status_check_at IS NULL
+        OR julianday(provider_last_status_check_at)
+           <= julianday('now', ?)
+      )
+  `).bind(
+    now,
+    orderId,
+    `-${Math.max(1, Number(cooldownSeconds) || 45)} seconds`
+  ).run();
+
+  return Number(result?.meta?.changes || 0) === 1;
+}
 
 async function confirmVisualProviderRefund(env, orderId, providerStatus, reason) {
   const now = new Date().toISOString();
@@ -1805,7 +1829,7 @@ async function refundVisualOrder(env, customerId, orderId, reason) {
   return changed;
 }
 
-async function attemptVisualProviderCancellation(env, order) {
+async function attemptVisualProviderCancellation(env, order, statusAlreadyChecked = false) {
   if (!order?.provider_order_id || !order.id) return { confirmed: false, reason: 'missing_provider_reference' };
   const now = Date.now();
   if (Number(order.provider_refund_confirmed || 0) === 1) return { confirmed: true, reason: 'already_confirmed' };
@@ -1815,7 +1839,14 @@ async function attemptVisualProviderCancellation(env, order) {
   ) {
     return { confirmed: false, reason: 'retry_cooldown' };
   }
-  // Poll for a code throughout the rental, not only near expiry. A delivered code always wins over cancellation.
+    if (!statusAlreadyChecked) {
+    const claimed = await claimVisualProviderStatusCheck(env, order.id, 45);
+    if (!claimed) {
+      return { confirmed: false, reason: 'status_check_throttled' };
+    }
+  }
+
+  // A delivered code always wins over cancellation.
   const statusResponse = await youngpgVirtualCall(env, 'getStatus', { id: order.provider_order_id });
   const token = String(statusResponse.data || '').trim();
   const codeMatch = token.match(/^STATUS_OK:(.+)$/);
