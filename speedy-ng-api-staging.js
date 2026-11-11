@@ -401,9 +401,36 @@ async function processFlutterwaveWebhook(request, env) {
 
   try {
     const accessToken = await flutterwaveAccessToken(env);
-    const verified = await flwV4Request(env, accessToken, `/charges/${encodeURIComponent(chargeId)}`);
-    const charge = verified?.data || {};
-    const paidAmount = Number(charge.amount);
+    const verified = await flwV4Request(
+  env,
+  accessToken,
+  `/charges/${encodeURIComponent(chargeId)}`
+);
+
+const charge = verified?.data || {};
+
+const verifiedChargeId = String(charge.id || "");
+const verifiedCustomerId = String(charge.customer_id || "");
+const expectedCustomerId = String(
+  customerMapping.flutterwave_customer_id
+);
+
+const storedChargeId = String(deposit.provider_charge_id || "");
+
+// Pay with Bank must match the exact Flutterwave customer and charge.
+// For Bank Transfer, reject a mismatching customer ID if Flutterwave supplies one.
+const chargeIdentityValid =
+  verifiedChargeId === chargeId &&
+  (
+    deposit.payment_method !== "pay_with_bank"
+      ? (!verifiedCustomerId || verifiedCustomerId === expectedCustomerId)
+      : (
+          verifiedCustomerId === expectedCustomerId &&
+          (!storedChargeId || storedChargeId === chargeId)
+        )
+  );
+
+const paidAmount = Number(charge.amount);
     const paidMinor = Math.round(paidAmount * 100);
     const expectedMinor = Number(deposit.expected_amount_minor);
     const verifiedReference = String(charge.reference || charge.tx_ref || "");
@@ -909,6 +936,10 @@ return respond({
 
   if (method === "POST" && path === "/api/customer/wallet/deposit") {
     const body = await readBody(request);
+
+if (!body || typeof body !== "object" || Array.isArray(body)) {
+  return jsonError("Invalid deposit request.", 400, request);
+}
 
 const paymentMethod = String(body.payment_method || "bank_transfer")
   .trim()
