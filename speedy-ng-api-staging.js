@@ -1207,7 +1207,7 @@ async function claimVisualProviderStatusCheck(env, orderId, minIntervalSeconds =
 
   const result = await env.DB.prepare(`
     UPDATE orders
-    SET provider_last_status_check_at=?, updated_at=?
+    SET provider_last_status_check_at=?
     WHERE id=?
       AND category='visual_numbers'
       AND status IN ('processing','review')
@@ -1216,7 +1216,7 @@ async function claimVisualProviderStatusCheck(env, orderId, minIntervalSeconds =
         provider_last_status_check_at IS NULL
         OR provider_last_status_check_at<=?
       )
-  `).bind(stamp, stamp, orderId, cutoff).run();
+  `).bind(stamp, orderId, cutoff).run();
 
   return Number(result?.meta?.changes || 0) === 1;
 }
@@ -1255,7 +1255,7 @@ async function refundVisualOrder(env, customerId, orderId, reason) {
   return changed;
 }
 
-async function attemptVisualProviderCancellation(env, order) {
+async function attemptVisualProviderCancellation(env, order, true); {
   if (!order?.provider_order_id || !order.id) return { confirmed: false, reason: 'missing_provider_reference' };
   const now = Date.now();
   if (Number(order.provider_refund_confirmed || 0) === 1) return { confirmed: true, reason: 'already_confirmed' };
