@@ -946,9 +946,9 @@ const paymentMethod = String(body.payment_method || "bank_transfer")
   .trim()
   .toLowerCase();
 
-if (!["bank_transfer", "pay_with_bank"].includes(paymentMethod)) {
+if (!["bank_transfer", "pay_with_bank", "ussd"].includes(paymentMethod)) {
   return jsonError(
-    "Choose a supported payment method: bank_transfer or pay_with_bank.",
+    "Choose a supported payment method: bank_transfer, pay_with_bank, or ussd.",
     400,
     request
   );
