@@ -564,7 +564,26 @@ async function sendVerificationEmail(env, customer) {
 }
 
 async function customerRoutes(request, env, path, method) {
-  if (!["/api/customer/register", "/api/customer/login", "/api/customer/verify-email", "/api/customer/resend-verification", "/api/customer/logout", "/api/customer/me", "/api/customer/wallets", "/api/customer/wallet", "/api/customer/wallet/transactions", "/api/customer/wallet/deposit", "/api/customer/wallet/card/config", "/api/customer/wallet/convert", "/api/customer/transactions", "/api/customer/forgot-password", "/api/customer/reset-password"].includes(path)) return null;
+  
+  if (![
+    "/api/customer/register",
+    "/api/customer/login",
+    "/api/customer/verify-email",
+    "/api/customer/resend-verification",
+    "/api/customer/logout",
+    "/api/customer/me",
+    "/api/customer/wallets",
+    "/api/customer/wallet",
+    "/api/customer/wallet/transactions",
+    "/api/customer/wallet/deposit",
+    "/api/customer/wallet/card/config",
+    "/api/customer/wallet/card/authorize",
+    "/api/customer/wallet/convert",
+    "/api/customer/transactions",
+    "/api/customer/forgot-password",
+    "/api/customer/reset-password"
+  ].includes(path)) return null;
+
   await ensureCustomerSchema(env);
 
   if (method === "POST" && path === "/api/customer/register") {
