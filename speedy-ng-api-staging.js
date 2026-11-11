@@ -1119,10 +1119,11 @@ async function ensureVisualOrderSchema(env) {
       const info = await env.DB.prepare('PRAGMA table_info(orders)').all();
       const columns = new Set((info.results || []).map(row => row.name));
       const additions = [
-        ['provider_phone', 'TEXT'], ['provider_service_code', 'TEXT'],
-        ['provider_country_code', 'TEXT'], ['provider_status', 'TEXT'], ['expires_at', 'TEXT'],
-        ['provider_cancel_at', 'TEXT'], ['provider_refund_confirmed', 'INTEGER NOT NULL DEFAULT 0'],
-        ['provider_refund_at', 'TEXT']
+       ['provider_phone', 'TEXT'], ['provider_service_code', 'TEXT'],
+['provider_country_code', 'TEXT'], ['provider_status', 'TEXT'], ['expires_at', 'TEXT'],
+['provider_cancel_at', 'TEXT'], ['provider_refund_confirmed', 'INTEGER NOT NULL DEFAULT 0'],
+['provider_refund_at', 'TEXT'],
+['provider_last_status_check_at', 'TEXT']
       ];
       for (const [name, definition] of additions) {
         if (!columns.has(name)) {
@@ -1196,7 +1197,29 @@ async function getVisualOrder(env, customerId, orderId) {
     provider_country_code, provider_status, expires_at, provider_cancel_at, provider_refund_confirmed, provider_refund_at, failure_reason, created_at, updated_at, delivery_json
     FROM orders WHERE id=? AND customer_id=? AND category='visual_numbers'`).bind(orderId, customerId).first();
 }
+async function claimVisualProviderStatusCheck(env, orderId, minIntervalSeconds = 45) {
+  const now = new Date();
+  const cutoff = new Date(
+    now.getTime() - minIntervalSeconds * 1000
+  ).toISOString();
 
+  const stamp = now.toISOString();
+
+  const result = await env.DB.prepare(`
+    UPDATE orders
+    SET provider_last_status_check_at=?, updated_at=?
+    WHERE id=?
+      AND category='visual_numbers'
+      AND status IN ('processing','review')
+      AND COALESCE(provider_refund_confirmed,0)=0
+      AND (
+        provider_last_status_check_at IS NULL
+        OR provider_last_status_check_at<=?
+      )
+  `).bind(stamp, stamp, orderId, cutoff).run();
+
+  return Number(result?.meta?.changes || 0) === 1;
+}
 async function confirmVisualProviderRefund(env, orderId, providerStatus, reason) {
   const now = new Date().toISOString();
   const result = await env.DB.prepare(`UPDATE orders SET provider_refund_confirmed=1, provider_refund_at=?,
@@ -1236,8 +1259,21 @@ async function attemptVisualProviderCancellation(env, order) {
   if (!order?.provider_order_id || !order.id) return { confirmed: false, reason: 'missing_provider_reference' };
   const now = Date.now();
   if (Number(order.provider_refund_confirmed || 0) === 1) return { confirmed: true, reason: 'already_confirmed' };
-  // Poll for a code throughout the rental, not only near expiry. A delivered code always wins over cancellation.
-  const statusResponse = await youngpgVirtualCall(env, 'getStatus', { id: order.provider_order_id });
+    // Prevent repeated status requests for the same order.
+  const claimed = arguments[2] === true
+    ? true
+    : await claimVisualProviderStatusCheck(env, order.id, 45);
+
+  if (!claimed) {
+    return { confirmed: false, reason: 'status_check_throttled' };
+  }
+
+  // A delivered code always wins over cancellation.
+  const statusResponse = await youngpgVirtualCall(
+    env,
+    'getStatus',
+    { id: order.provider_order_id }
+  );
   const token = String(statusResponse.data || '').trim();
   const codeMatch = token.match(/^STATUS_OK:(.+)$/);
   if (codeMatch && /^[a-zA-Z0-9-]{3,80}$/.test(codeMatch[1].trim())) {
@@ -1376,7 +1412,45 @@ async function visualNumberOrderRoutes(request, env, url, path, method) {
       const updated = await getVisualOrder(env, customer.id, orderId);
       return respond({ ok: true, order: updated, refunded, message: refunded ? 'Your refund has been added to your USD wallet.' : 'This order has already changed state or been refunded.' }, 200, request);
     }
-    const statusResult = await youngpgVirtualCall(env, 'getStatus', { id: order.provider_order_id });
+        const claimed = await claimVisualProviderStatusCheck(env, orderId, 45);
+
+    if (!claimed) {
+      const latest = await getVisualOrder(env, customer.id, orderId);
+
+      if (latest?.status === 'completed') {
+        let delivery = null;
+
+        try {
+          delivery = latest.delivery_json
+            ? JSON.parse(latest.delivery_json)
+            : null;
+        } catch {}
+
+        return respond({
+          ok: true,
+          status: 'completed',
+          order: customerSafeOrder(latest),
+          delivery
+        }, 200, request);
+      }
+
+      return respond({
+        ok: true,
+        status: 'waiting',
+        throttled: true,
+        provider_status: latest?.provider_status || 'STATUS_WAIT_CODE',
+        order_id: orderId,
+        refund_available: false,
+        message: 'This order was checked recently. Please wait briefly before checking again.'
+      }, 200, request);
+    }
+
+    const statusResult = await youngpgVirtualCall(
+      env,
+      'getStatus',
+      { id: order.provider_order_id }
+    );
+
     const token = String(statusResult.data || '').trim();
     if (token === 'STATUS_WAIT_CODE') {
       await env.DB.prepare("UPDATE orders SET provider_status=?, updated_at=? WHERE id=? AND customer_id=? AND status IN ('processing','review')")
