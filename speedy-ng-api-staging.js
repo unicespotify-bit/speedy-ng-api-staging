@@ -953,7 +953,21 @@ if (!["bank_transfer", "pay_with_bank", "ussd"].includes(paymentMethod)) {
     request
   );
 }
+const ussdBankCodes = [
+  "044", "050", "070", "011", "214", "058",
+  "030", "082", "303", "105", "221", "232",
+  "032", "033", "215", "090110", "035", "057"
+];
 
+const ussdBankCode = String(body.bank_code || "").trim();
+
+if (paymentMethod === "ussd" && !ussdBankCodes.includes(ussdBankCode)) {
+  return jsonError(
+    "Select a supported Nigerian bank for USSD payment.",
+    400,
+    request
+  );
+}
 if (String(body.currency || "NGN").toUpperCase() !== "NGN") {
   return jsonError("Wallet deposits currently support NGN only.", 400, request);
 }
