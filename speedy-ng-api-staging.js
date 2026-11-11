@@ -3729,7 +3729,7 @@ LIMIT 20
 
       if (result.confirmed) providerConfirmed++;
       else if (result.completed) completed++;
-      else if (result.reason !== 'not_due') deferred++;
+      else if (!['not_due', 'status_check_throttled'].includes(result.reason)) deferred++;
 
       // If cancellation was confirmed, attempt the customer refund.
       // refundVisualOrder checks that the rental expiry has passed.
