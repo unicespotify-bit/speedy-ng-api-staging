@@ -1140,6 +1140,90 @@ if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
     redirectUrl
   }, 201, request);
       }
+            if (paymentMethod === "ussd") {
+        const methodResponse = await flwV4Request(
+          env,
+          accessToken,
+          "/payment-methods",
+          {
+            method: "POST",
+            idempotencyKey: `spd-ussd-method-${reference}`,
+            body: {
+              type: "ussd",
+              ussd: {
+                account_bank: ussdBankCode
+              }
+            }
+          }
+        );
+
+        const paymentMethodId = methodResponse?.data?.id;
+
+        if (!paymentMethodId) {
+          throw new Error("Flutterwave did not return a USSD payment method ID.");
+        }
+
+        const chargeResponse = await flwV4Request(
+          env,
+          accessToken,
+          "/charges",
+          {
+            method: "POST",
+            idempotencyKey: `spd-ussd-charge-${reference}`,
+            body: {
+              reference,
+              currency: "NGN",
+              customer_id: flwCustomerId,
+              payment_method_id: paymentMethodId,
+              amount
+            }
+          }
+        );
+
+        const charge = chargeResponse?.data || {};
+        const chargeId = charge.id;
+        const instruction =
+          charge?.next_action?.payment_instruction?.note;
+
+        if (!chargeId || !instruction) {
+          throw new Error("Flutterwave did not return the USSD payment instructions.");
+        }
+
+        const savedCharge = await env.DB.prepare(`
+          UPDATE wallet_deposits
+          SET payment_method = 'ussd',
+              provider_charge_id = ?,
+              provider_payload_json = ?,
+              updated_at = ?
+          WHERE provider_reference = ?
+            AND customer_id = ?
+            AND status = 'pending'
+            AND credited_at IS NULL
+        `).bind(
+          String(chargeId),
+          JSON.stringify(chargeResponse).slice(0, 100000),
+          new Date().toISOString(),
+          reference,
+          customer.id
+        ).run();
+
+        if (Number(savedCharge?.meta?.changes || 0) !== 1) {
+          throw new Error("USSD charge could not be saved to the deposit record.");
+        }
+
+        return respond({
+          ok: true,
+          reference,
+          amount,
+          currency: "NGN",
+          status: String(charge.status || "pending"),
+          paymentMethod: "ussd",
+          paymentInstructions: {
+            bankCode: ussdBankCode,
+            instruction
+          }
+        }, 201, request);
+            }
       const accountResponse = await flwV4Request(env, accessToken, "/virtual-accounts", {
         method: "POST",
         idempotencyKey: `spd-deposit-${reference}`,
