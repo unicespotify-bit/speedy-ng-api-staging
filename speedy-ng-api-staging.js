@@ -1829,7 +1829,7 @@ async function refundVisualOrder(env, customerId, orderId, reason) {
   return changed;
 }
 
-async function attemptVisualProviderCancellation(env, order, statusAlreadyChecked = false) {
+async function attemptVisualProviderCancellation(env, order, initialStatusResponse = null) {
   if (!order?.provider_order_id || !order.id) return { confirmed: false, reason: 'missing_provider_reference' };
   const now = Date.now();
   if (Number(order.provider_refund_confirmed || 0) === 1) return { confirmed: true, reason: 'already_confirmed' };
@@ -1839,15 +1839,23 @@ async function attemptVisualProviderCancellation(env, order, statusAlreadyChecke
   ) {
     return { confirmed: false, reason: 'retry_cooldown' };
   }
-    if (!statusAlreadyChecked) {
+      let statusResponse = initialStatusResponse;
+
+  if (!statusResponse) {
     const claimed = await claimVisualProviderStatusCheck(env, order.id, 45);
+
     if (!claimed) {
       return { confirmed: false, reason: 'status_check_throttled' };
     }
+
+    statusResponse = await youngpgVirtualCall(
+      env,
+      'getStatus',
+      { id: order.provider_order_id }
+    );
   }
 
   // A delivered code always wins over cancellation.
-  const statusResponse = await youngpgVirtualCall(env, 'getStatus', { id: order.provider_order_id });
   const token = String(statusResponse.data || '').trim();
   const codeMatch = token.match(/^STATUS_OK:(.+)$/);
   if (codeMatch && /^[a-zA-Z0-9-]{3,80}$/.test(codeMatch[1].trim())) {
