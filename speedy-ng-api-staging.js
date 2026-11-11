@@ -879,7 +879,7 @@ return respond({
     const customer = await env.DB.prepare(`SELECT id, email, password_hash, password_salt, email_verified, status FROM customers WHERE email = ? COLLATE NOCASE`).bind(email).first();
     if (!customer || customer.status !== "active" || !customer.password_hash || !customer.password_salt) return jsonError("Invalid email or password.", 401, request);
     if (Number(customer.email_verified) !== 1) return jsonError("Please verify your email address before signing in. You can request a new code if needed.", 403, request);
-    const verifiedIterations = await verifyPassword(password, customer.password_salt, customer.password_hash, [100000, 210000]);
+    const verifiedIterations = await verifyPassword(password, customer.password_salt, customer.password_hash, [100000]);
     if (!verifiedIterations) return jsonError("Invalid email or password.", 401, request);
     await ensureCustomerWallets(env, customer.id);
     const sessionToken = token();
