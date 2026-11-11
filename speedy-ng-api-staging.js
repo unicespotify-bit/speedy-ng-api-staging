@@ -417,16 +417,14 @@ const expectedCustomerId = String(
 
 const storedChargeId = String(deposit.provider_charge_id || "");
 
-// Pay with Bank must match the exact Flutterwave customer and charge.
-// For Bank Transfer, reject a mismatching customer ID if Flutterwave supplies one.
 const chargeIdentityValid =
   verifiedChargeId === chargeId &&
   (
-    deposit.payment_method !== "pay_with_bank"
+    deposit.payment_method === "bank_transfer"
       ? (!verifiedCustomerId || verifiedCustomerId === expectedCustomerId)
       : (
           verifiedCustomerId === expectedCustomerId &&
-          (!storedChargeId || storedChargeId === chargeId)
+          storedChargeId === chargeId
         )
   );
 
