@@ -2113,7 +2113,7 @@ if (!price) {
       await env.DB.prepare("UPDATE orders SET provider_status=?, updated_at=? WHERE id=? AND customer_id=? AND status IN ('processing','review')")
         .bind(token, new Date().toISOString(), orderId, customer.id).run();
       if (order.provider_cancel_at && Date.now() >= Date.parse(order.provider_cancel_at)) {
-        try { const result = await attemptVisualProviderCancellationSafely(env, order); const latest = await getVisualOrder(env, customer.id, orderId);
+        try { const result = await attemptVisualProviderCancellationSafely(env, order, statusResult); const latest = await getVisualOrder(env, customer.id, orderId);
           if (result.completed || latest?.status === 'completed') return respond({ ok: true, status: 'completed', order: customerSafeOrder(latest), message: 'Your SMS code arrived. This order is successful.' }, 200, request);
           return respond({ ok: true, status: 'waiting', provider_refund_confirmed: Number(latest?.provider_refund_confirmed || 0) === 1, refund_available: Boolean(latest?.expires_at && Date.now() >= Date.parse(latest.expires_at) && Number(latest?.provider_refund_confirmed || 0) === 1), order: customerSafeOrder(latest), message: Number(latest?.provider_refund_confirmed || 0) === 1 ? 'Provider cancellation confirmed. Refund unlocks when the countdown reaches zero.' : 'The provider cancellation is being checked.' }, 200, request);
         } catch (error) { console.error('Scheduled provider cancellation check failed:', error?.message || error); }
@@ -3685,6 +3685,12 @@ async function processExpiredVisualNumberOrders(env) {
         OR provider_cancel_retry_at IS NULL
         OR provider_cancel_retry_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       )
+          AND (
+        COALESCE(provider_refund_confirmed, 0) = 1
+        OR provider_last_status_check_at IS NULL
+        OR julianday(provider_last_status_check_at)
+           <= julianday('now', '-45 seconds')
+      )
     ORDER BY
       CASE
         WHEN COALESCE(provider_refund_confirmed, 0) = 1 THEN 0
@@ -3695,7 +3701,6 @@ async function processExpiredVisualNumberOrders(env) {
       created_at ASC
 LIMIT 20
   `).all();
-
   let checked = 0;
   let providerConfirmed = 0;
   let completed = 0;
