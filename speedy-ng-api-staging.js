@@ -564,7 +564,7 @@ async function sendVerificationEmail(env, customer) {
 }
 
 async function customerRoutes(request, env, path, method) {
-  if (!["/api/customer/register", "/api/customer/login", "/api/customer/verify-email", "/api/customer/resend-verification", "/api/customer/logout", "/api/customer/me", "/api/customer/wallets", "/api/customer/wallet", "/api/customer/wallet/transactions", "/api/customer/wallet/deposit", "/api/customer/wallet/card/authorize", "/api/customer/wallet/convert", "/api/customer/transactions", "/api/customer/forgot-password", "/api/customer/reset-password"].includes(path)) return null;
+  if (!["/api/customer/register", "/api/customer/login", "/api/customer/verify-email", "/api/customer/resend-verification", "/api/customer/logout", "/api/customer/me", "/api/customer/wallets", "/api/customer/wallet", "/api/customer/wallet/transactions", "/api/customer/wallet/deposit", "/api/customer/wallet/card/config", "/api/customer/wallet/convert", "/api/customer/transactions", "/api/customer/forgot-password", "/api/customer/reset-password"].includes(path)) return null;
   await ensureCustomerSchema(env);
 
   if (method === "POST" && path === "/api/customer/register") {
@@ -890,6 +890,47 @@ return respond({
 
   const customer = await getCustomer(request, env);
   if (!customer) return jsonError("Customer login required.", 401, request);
+  // Return the Flutterwave encryption key only to an authenticated customer.
+if (
+  method === "GET" &&
+  path === "/api/customer/wallet/card/config"
+) {
+  const encryptionKey = String(env.FLW_ENCRYPTION_KEY || "").trim();
+
+  if (!encryptionKey) {
+    return jsonError(
+      "Flutterwave card encryption is not configured.",
+      503,
+      request
+    );
+  }
+
+  try {
+    const decodedKey = Uint8Array.from(
+      atob(encryptionKey),
+      character => character.charCodeAt(0)
+    );
+
+    if (decodedKey.length !== 32) {
+      return jsonError(
+        "Flutterwave encryption key has an invalid format.",
+        503,
+        request
+      );
+    }
+  } catch {
+    return jsonError(
+      "Flutterwave encryption key has an invalid format.",
+      503,
+      request
+    );
+  }
+
+  return respond({
+    ok: true,
+    encryptionKey
+  }, 200, request);
+}
 
   if (method === "POST" && path === "/api/customer/logout") {
     const suppliedToken = (request.headers.get("Authorization") || "").slice(7);
