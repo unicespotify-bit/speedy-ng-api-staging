@@ -438,6 +438,7 @@ const paidAmount = Number(charge.amount);
     const verifiedStatus = String(charge.status || "").toLowerCase();
 
     if (
+      !chargeIdentityValid ||
       !["succeeded", "successful"].includes(verifiedStatus) ||
       verifiedReference !== reference ||
       verifiedCurrency !== String(deposit.currency).toUpperCase() ||
