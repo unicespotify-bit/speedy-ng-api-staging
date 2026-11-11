@@ -365,6 +365,30 @@ async function processFlutterwaveWebhook(request, env) {
       .bind(now, webhookId).run();
     return new Response("OK", { status: 200 });
   }
+    // Confirm which Flutterwave customer owns this Speedy deposit.
+  const customerMapping = await env.DB.prepare(
+    "SELECT flutterwave_customer_id FROM flutterwave_customers WHERE customer_id = ? LIMIT 1"
+  ).bind(deposit.customer_id).first();
+
+  if (!customerMapping?.flutterwave_customer_id) {
+    await env.DB.prepare(`
+      UPDATE wallet_deposits
+      SET status = 'review',
+          failure_reason = 'Flutterwave customer mapping is missing; manual review required.',
+          updated_at = ?
+      WHERE id = ? AND credited_at IS NULL
+    `).bind(now, deposit.id).run();
+
+    await env.DB.prepare(`
+      UPDATE flutterwave_webhook_events
+      SET processing_status = 'ignored',
+          processed_at = ?,
+          last_error = 'Missing Flutterwave customer mapping'
+      WHERE webhook_id = ?
+    `).bind(now, webhookId).run();
+
+    return new Response("OK", { status: 200 });
+  }
 
   const ledgerReference = `FLW-${reference}`;
   const priorLedger = await env.DB.prepare("SELECT id FROM transactions WHERE reference = ? LIMIT 1")
@@ -886,8 +910,16 @@ return respond({
   if (method === "POST" && path === "/api/customer/wallet/deposit") {
     const body = await readBody(request);
 
-if (!body || typeof body !== "object" || Array.isArray(body)) {
-  return jsonError("Invalid deposit request.", 400, request);
+const paymentMethod = String(body.payment_method || "bank_transfer")
+  .trim()
+  .toLowerCase();
+
+if (!["bank_transfer", "pay_with_bank"].includes(paymentMethod)) {
+  return jsonError(
+    "Choose a supported payment method: bank_transfer or pay_with_bank.",
+    400,
+    request
+  );
 }
 
 if (String(body.currency || "NGN").toUpperCase() !== "NGN") {
@@ -973,6 +1005,95 @@ if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
     try {
       const accessToken = await flutterwaveAccessToken(env);
       const flwCustomerId = await getOrCreateFlutterwaveCustomer(env, customer, accessToken);
+      if (paymentMethod === "pay_with_bank") {
+  // Create a Flutterwave V4 bank-account payment method.
+  const methodResponse = await flwV4Request(
+    env,
+    accessToken,
+    "/payment-methods",
+    {
+      method: "POST",
+      idempotencyKey: `spd-pwb-method-${reference}`,
+      body: {
+        type: "bank_account",
+        bank_account: {}
+      }
+    }
+  );
+
+  const paymentMethodId = methodResponse?.data?.id;
+
+  if (!paymentMethodId) {
+    throw new Error(
+      "Flutterwave did not return a bank-account payment method ID."
+    );
+  }
+
+  // Initiate the NGN bank-account charge.
+  const chargeResponse = await flwV4Request(
+    env,
+    accessToken,
+    "/charges",
+    {
+      method: "POST",
+      idempotencyKey: `spd-pwb-charge-${reference}`,
+      body: {
+        reference,
+        currency: "NGN",
+        customer_id: flwCustomerId,
+        payment_method_id: paymentMethodId,
+        amount,
+        redirect_url:
+          `https://speedy-ng.pages.dev/dashboard.html?deposit=${encodeURIComponent(reference)}`
+      }
+    }
+  );
+
+  const charge = chargeResponse?.data || {};
+  const chargeId = charge.id;
+  const redirectUrl = charge?.next_action?.redirect_url?.url;
+
+  if (!chargeId || !redirectUrl) {
+    throw new Error(
+      "Flutterwave did not return the Pay with Bank authorization link."
+    );
+  }
+
+  // Save the charge against this customer's pending deposit.
+  const savedCharge = await env.DB.prepare(`
+    UPDATE wallet_deposits
+    SET payment_method = 'pay_with_bank',
+        provider_charge_id = ?,
+        provider_payload_json = ?,
+        updated_at = ?
+    WHERE provider_reference = ?
+      AND customer_id = ?
+      AND status = 'pending'
+      AND credited_at IS NULL
+  `).bind(
+    String(chargeId),
+    JSON.stringify(chargeResponse).slice(0, 100000),
+    new Date().toISOString(),
+    reference,
+    customer.id
+  ).run();
+
+  if (Number(savedCharge?.meta?.changes || 0) !== 1) {
+    throw new Error(
+      "Pay with Bank charge could not be saved to the deposit record."
+    );
+  }
+
+  return respond({
+    ok: true,
+    reference,
+    amount,
+    currency: "NGN",
+    status: String(charge.status || "pending"),
+    paymentMethod: "pay_with_bank",
+    redirectUrl
+  }, 201, request);
+      }
       const accountResponse = await flwV4Request(env, accessToken, "/virtual-accounts", {
         method: "POST",
         idempotencyKey: `spd-deposit-${reference}`,
