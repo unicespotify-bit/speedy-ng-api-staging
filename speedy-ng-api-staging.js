@@ -885,20 +885,84 @@ return respond({
 
   if (method === "POST" && path === "/api/customer/wallet/deposit") {
     const body = await readBody(request);
-    const rawAmount = body?.amount;
-    const amount = Number(rawAmount);
-    // Wallet deposits are NGN major units; reject fractions smaller than one kobo
-    // instead of silently rounding the amount sent to Flutterwave.
-    if (!Number.isFinite(amount) || amount < 100 || amount > 5000000 ||
-        !Number.isSafeInteger(Math.round(amount * 100)) ||
-        Math.abs(amount * 100 - Math.round(amount * 100)) > 1e-7) {
-      return jsonError("Deposit must be between ₦100 and ₦5,000,000, with no more than 2 decimal places.", 400, request);
-    }
-    if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
-      return jsonError("Flutterwave V4 production credentials are not configured. No deposit was created.", 503, request);
-    }
-    const amountMinor = Math.round(amount * 100);
-    if (!Number.isSafeInteger(amountMinor)) return jsonError("Invalid deposit amount.", 400, request);
+
+if (!body || typeof body !== "object" || Array.isArray(body)) {
+  return jsonError("Invalid deposit request.", 400, request);
+}
+
+if (String(body.currency || "NGN").toUpperCase() !== "NGN") {
+  return jsonError("Wallet deposits currently support NGN only.", 400, request);
+}
+
+// Accept either naira (amount) or kobo (amount_minor).
+// Never accept both because they could contain conflicting amounts.
+const hasMajor = body.amount !== undefined &&
+                 body.amount !== null &&
+                 body.amount !== "";
+
+const hasMinor = body.amount_minor !== undefined &&
+                 body.amount_minor !== null &&
+                 body.amount_minor !== "";
+
+if (hasMajor === hasMinor) {
+  return jsonError(
+    "Provide exactly one amount: amount in naira or amount_minor in kobo.",
+    400,
+    request
+  );
+}
+
+let amountMinor;
+
+if (hasMinor) {
+  amountMinor = Number(body.amount_minor);
+
+  if (!Number.isSafeInteger(amountMinor)) {
+    return jsonError(
+      "Deposit amount in kobo must be a whole number.",
+      400,
+      request
+    );
+  }
+} else {
+  const amountInput = Number(body.amount);
+
+  if (
+    !Number.isFinite(amountInput) ||
+    !Number.isSafeInteger(Math.round(amountInput * 100)) ||
+    Math.abs(amountInput * 100 - Math.round(amountInput * 100)) > 1e-7
+  ) {
+    return jsonError(
+      "Enter a valid naira amount with no more than 2 decimal places.",
+      400,
+      request
+    );
+  }
+
+  amountMinor = Math.round(amountInput * 100);
+}
+
+if (
+  !Number.isSafeInteger(amountMinor) ||
+  amountMinor < 10000 ||
+  amountMinor > 500000000
+) {
+  return jsonError(
+    "Deposit must be between ₦100 and ₦5,000,000.",
+    400,
+    request
+  );
+}
+
+const amount = amountMinor / 100;
+
+if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
+  return jsonError(
+    "Flutterwave V4 credentials are not configured. No deposit was created.",
+    503,
+    request
+  );
+}
     await ensureCustomerWallets(env, customer.id);
     const reference = `SPD-${Date.now()}-${token().slice(0, 12)}`;
     const now = new Date().toISOString();
