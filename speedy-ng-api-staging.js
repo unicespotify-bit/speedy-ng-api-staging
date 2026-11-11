@@ -1928,9 +1928,9 @@ async function attemptVisualProviderCancellation(env, order, initialStatusRespon
 
   return { confirmed: false, reason: cancelToken || 'provider_not_confirmed' };
 }
-async function attemptVisualProviderCancellationSafely(env, order) {
+ async function attemptVisualProviderCancellationSafely(env, order, initialStatusResponse = null) {
   try {
-    return await attemptVisualProviderCancellation(env, order);
+    return await attemptVisualProviderCancellation(env, order, initialStatusResponse);
   } catch (error) {
     const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
@@ -2080,7 +2080,34 @@ if (!price) {
       const updated = await getVisualOrder(env, customer.id, orderId);
       return respond({ ok: true, order: customerSafeOrder(updated), refunded, message: refunded ? 'Your refund has been added to your USD wallet.' : 'This order has already changed state or been refunded.' }, 200, request);
     }
-    const statusResult = await youngpgVirtualCall(env, 'getStatus', { id: order.provider_order_id });
+        const claimed = await claimVisualProviderStatusCheck(env, orderId, 45);
+
+    if (!claimed) {
+      const latest = await getVisualOrder(env, customer.id, orderId);
+      const currentOrder = latest || order;
+      const refundReady = Boolean(
+        Number(currentOrder.provider_refund_confirmed || 0) === 1 &&
+        currentOrder.expires_at &&
+        Date.now() >= Date.parse(currentOrder.expires_at)
+      );
+
+      return respond({
+        ok: true,
+        status: 'waiting',
+        provider_status: currentOrder.provider_status || 'STATUS_WAIT_CODE',
+        order: customerSafeOrder(currentOrder),
+        refund_available: refundReady,
+        message: refundReady
+          ? 'Provider cancellation confirmed. Your refund is ready.'
+          : 'Your order is being checked. Please wait before checking again.'
+      }, 200, request);
+    }
+
+    const statusResult = await youngpgVirtualCall(
+      env,
+      'getStatus',
+      { id: order.provider_order_id }
+    );
     const token = String(statusResult.data || '').trim();
     if (token === 'STATUS_WAIT_CODE') {
       await env.DB.prepare("UPDATE orders SET provider_status=?, updated_at=? WHERE id=? AND customer_id=? AND status IN ('processing','review')")
