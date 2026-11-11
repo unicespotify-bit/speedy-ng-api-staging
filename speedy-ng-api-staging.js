@@ -1222,6 +1222,147 @@ if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
           }
         }, 201, request);
             }
+            if (paymentMethod === "card") {
+        const cardInput = body.card;
+
+        if (!cardInput || typeof cardInput !== "object" || Array.isArray(cardInput)) {
+          throw new Error("Encrypted card details are required.");
+        }
+
+        const encryptedCardNumber = String(
+          cardInput.encrypted_card_number || ""
+        );
+        const encryptedExpiryMonth = String(
+          cardInput.encrypted_expiry_month || ""
+        );
+        const encryptedExpiryYear = String(
+          cardInput.encrypted_expiry_year || ""
+        );
+        const encryptedCvv = String(
+          cardInput.encrypted_cvv || ""
+        );
+        const cardNonce = String(cardInput.nonce || "");
+
+        const encryptedFields = [
+          encryptedCardNumber,
+          encryptedExpiryMonth,
+          encryptedExpiryYear,
+          encryptedCvv
+        ];
+
+        const validEncryptedFields = encryptedFields.every(value =>
+          value.length > 0 &&
+          value.length <= 2048 &&
+          /^[A-Za-z0-9+/]+={0,2}$/.test(value)
+        );
+
+        if (
+          !validEncryptedFields ||
+          !/^[A-Za-z0-9]{12}$/.test(cardNonce)
+        ) {
+          throw new Error(
+            "Invalid encrypted card details. Please check the card encryption."
+          );
+        }
+
+        // Create the encrypted Flutterwave V4 card payment method.
+        // Raw card numbers and CVVs must never be sent to this Worker.
+        const methodResponse = await flwV4Request(
+          env,
+          accessToken,
+          "/payment-methods",
+          {
+            method: "POST",
+            idempotencyKey: `spd-card-method-${reference}`,
+            body: {
+              type: "card",
+              card: {
+                encrypted_card_number: encryptedCardNumber,
+                encrypted_expiry_month: encryptedExpiryMonth,
+                encrypted_expiry_year: encryptedExpiryYear,
+                encrypted_cvv: encryptedCvv,
+                nonce: cardNonce
+              }
+            }
+          }
+        );
+
+        const paymentMethodId = methodResponse?.data?.id;
+
+        if (!paymentMethodId) {
+          throw new Error(
+            "Flutterwave did not return a card payment method ID."
+          );
+        }
+
+        // Create the actual NGN card charge.
+        const chargeResponse = await flwV4Request(
+          env,
+          accessToken,
+          "/charges",
+          {
+            method: "POST",
+            idempotencyKey: `spd-card-charge-${reference}`,
+            body: {
+              reference,
+              currency: "NGN",
+              customer_id: flwCustomerId,
+              payment_method_id: paymentMethodId,
+              amount,
+              redirect_url:
+                `https://speedy-ng.pages.dev/dashboard.html?deposit=${encodeURIComponent(reference)}`
+            }
+          }
+        );
+
+        const charge = chargeResponse?.data || {};
+        const chargeId = charge.id;
+
+        if (!chargeId) {
+          throw new Error(
+            "Flutterwave did not return a card charge ID."
+          );
+        }
+
+        // Save only the charge response and charge ID.
+        // Never save the encrypted card input or raw card details.
+        const savedCharge = await env.DB.prepare(`
+          UPDATE wallet_deposits
+          SET payment_method = 'card',
+              provider_charge_id = ?,
+              provider_payload_json = ?,
+              updated_at = ?
+          WHERE provider_reference = ?
+            AND customer_id = ?
+            AND status = 'pending'
+            AND credited_at IS NULL
+        `).bind(
+          String(chargeId),
+          JSON.stringify(chargeResponse).slice(0, 100000),
+          new Date().toISOString(),
+          reference,
+          customer.id
+        ).run();
+
+        if (Number(savedCharge?.meta?.changes || 0) !== 1) {
+          throw new Error(
+            "Card charge could not be saved to the deposit record."
+          );
+        }
+
+        return respond({
+          ok: true,
+          reference,
+          amount,
+          currency: "NGN",
+          status: String(charge.status || "pending"),
+          paymentMethod: "card",
+          chargeId: String(chargeId),
+          nextAction: charge.next_action || null,
+          redirectUrl:
+            charge?.next_action?.redirect_url?.url || null
+        }, 201, request);
+                  }
       const accountResponse = await flwV4Request(env, accessToken, "/virtual-accounts", {
         method: "POST",
         idempotencyKey: `spd-deposit-${reference}`,
