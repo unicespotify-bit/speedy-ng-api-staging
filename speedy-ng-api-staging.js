@@ -508,6 +508,124 @@ const paidAmount = Number(charge.amount);
   return new Response("OK", { status: 200 });
 }
 
+/**
+ * Recover missed Flutterwave V4 payment notifications.
+ * All recovered charges pass through the existing webhook verification
+ * and protected wallet-crediting process.
+ */
+async function reconcilePendingFlutterwaveDeposits(env) {
+  const secret = env.FLW_WEBHOOK_SECRET || env.FLW_SECRET_HASH;
+
+  if (!secret) {
+    console.warn("Flutterwave reconciliation skipped: webhook secret missing.");
+    return;
+  }
+
+  const pending = await env.DB.prepare(`
+    SELECT *
+    FROM wallet_deposits
+    WHERE provider = 'flutterwave'
+      AND status = 'pending'
+      AND credited_at IS NULL
+    ORDER BY created_at ASC
+    LIMIT 20
+  `).all();
+
+  for (const deposit of (pending?.results || [])) {
+    try {
+      const reference = String(deposit.provider_reference || "");
+      if (!reference) continue;
+
+      const mapping = await env.DB.prepare(
+        "SELECT flutterwave_customer_id FROM flutterwave_customers WHERE customer_id = ? LIMIT 1"
+      ).bind(deposit.customer_id).first();
+
+      const customerId = String(mapping?.flutterwave_customer_id || "");
+      if (!customerId) continue;
+
+      const token = await flutterwaveAccessToken(env);
+
+      const query = new URLSearchParams({
+        reference,
+        customer_id: customerId,
+        size: "10",
+        page: "1"
+      });
+
+      const result = await flwV4Request(
+        env,
+        token,
+        `/charges?${query.toString()}`
+      );
+
+      const charges = Array.isArray(result?.data) ? result.data : [];
+
+      const charge = charges.find(item => {
+        const amount = Number(item?.amount);
+        const minor = Math.round(amount * 100);
+
+        return (
+          String(item?.reference || "") === reference &&
+          String(item?.customer_id || "") === customerId &&
+          String(item?.status || "").toLowerCase() === "succeeded" &&
+          String(item?.currency || "").toUpperCase() ===
+            String(deposit.currency || "").toUpperCase() &&
+          Number.isFinite(amount) &&
+          Number.isSafeInteger(minor) &&
+          Math.abs(amount * 100 - minor) < 1e-7 &&
+          minor === Number(deposit.expected_amount_minor)
+        );
+      });
+
+      if (!charge?.id) continue;
+
+      // Reuse the existing secure webhook processing function.
+      const payload = {
+        id: `reconcile-${String(charge.id)}`,
+        type: "charge.completed",
+        data: {
+          id: String(charge.id),
+          reference
+        }
+      };
+
+      const rawBody = JSON.stringify(payload);
+      const signature = await hmacSha256Base64(
+        String(secret),
+        rawBody
+      );
+
+      const request = new Request(
+        "https://internal.speedy.invalid/api/webhooks/flutterwave",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "flutterwave-signature": signature,
+            "x-trace-id": crypto.randomUUID()
+          },
+          body: rawBody
+        }
+      );
+
+      const response = await processFlutterwaveWebhook(request, env);
+
+      if (!response.ok) {
+        console.warn("Flutterwave reconciliation needs attention.", {
+          depositId: deposit.id,
+          chargeId: String(charge.id),
+          responseStatus: response.status
+        });
+      }
+    } catch (error) {
+      console.error("Flutterwave reconciliation failed.", {
+        depositId: deposit.id,
+        error: String(error?.message || error).slice(0, 300)
+      });
+    }
+  }
+}
+
 function safeStringEqual(a, b) {
   if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) return false;
   let diff = 0;
@@ -4459,7 +4577,7 @@ LIMIT 20
           env,
           order.customer_id,
           order.id,
-          'YoungPG cancellation and provider refund confirmed.'
+          'YoungPG and provider refund confirmed.'
         );
 
         if (wasRefunded) refunded++;
@@ -4520,6 +4638,9 @@ export default {
     }
   },
   async scheduled(controller, env, ctx) {
-    ctx.waitUntil(processExpiredVisualNumberOrders(env));
+  ctx.waitUntil(Promise.allSettled([
+    processExpiredVisualNumberOrders(env),
+    reconcilePendingFlutterwaveDeposits(env)
+  ]));
   }
 };
