@@ -331,7 +331,14 @@ async function processFlutterwaveWebhook(request, env) {
   const supplied = request.headers.get("flutterwave-signature") || "";
   const expected = await hmacSha256Base64(String(secret), rawBody);
   if (!supplied || !safeStringEqual(supplied, expected)) {
-    return new Response("Invalid signature", { status: 401 });
+  console.warn("Flutterwave webhook signature rejected", {
+    signaturePresent: Boolean(supplied),
+    bodyLength: rawBody.length,
+    traceId: request.headers.get("x-trace-id") || null,
+    receivedAt: new Date().toISOString()
+  });
+
+  return new Response("Invalid signature", { status: 401 });
   }
 
   let payload;
