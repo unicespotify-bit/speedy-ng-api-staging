@@ -1148,7 +1148,8 @@ if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
         payment_method_id: paymentMethodId,
         amount,
         redirect_url:
-          `https://speedy-ng.pages.dev/dashboard.html?deposit=${encodeURIComponent(reference)}`
+          redirect_url:
+  `https://speedy-blue.unicespotify.workers.dev/dashboard?deposit=${encodeURIComponent(reference)}`
       }
     }
   );
