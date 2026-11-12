@@ -2969,11 +2969,6 @@ if (!countryName) {
     request
   );
 }
-const cooldownKey = '__youngpg_virtual_global_cooldown__';
-
-let savedCooldown;
-
-try {
 let quoteResponse;
 
 try {
