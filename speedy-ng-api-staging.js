@@ -1145,9 +1145,9 @@ if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
         reference,
         currency: "NGN",
         customer_id: flwCustomerId,
-        payment_method_id: paymentMethodId,
+                payment_method_id: paymentMethodId,
         amount,
-                  redirect_url:
+        redirect_url:
           `https://speedy-blue.unicespotify.workers.dev/dashboard?deposit=${encodeURIComponent(reference)}`
       }
     }
@@ -1367,9 +1367,9 @@ if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
               reference,
               currency: "NGN",
               customer_id: flwCustomerId,
-              payment_method_id: paymentMethodId,
+                            payment_method_id: paymentMethodId,
               amount,
-                            redirect_url:
+              redirect_url:
                 `https://speedy-blue.unicespotify.workers.dev/dashboard?deposit=${encodeURIComponent(reference)}`
             }
           }
