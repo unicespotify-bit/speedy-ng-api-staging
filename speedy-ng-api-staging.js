@@ -1896,21 +1896,75 @@ if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
 async function providerFetch(url, init = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12000);
+
+  let requestInfo = {
+    provider: 'YoungPG',
+    action: null,
+    country: null,
+    service: null
+  };
+
   try {
-    const response = await fetch(url, { ...init, signal: controller.signal });
+    const safeUrl = new URL(url);
+    requestInfo.action = safeUrl.searchParams.get('action');
+    requestInfo.country = safeUrl.searchParams.get('country');
+    requestInfo.service = safeUrl.searchParams.get('service');
+
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+
     const text = await response.text();
+
     let data = text;
-    try { data = JSON.parse(text); } catch {}
+    try {
+      data = JSON.parse(text);
+    } catch {}
+
+    const diagnostic = {
+      timestamp: new Date().toISOString(),
+      ...requestInfo,
+      httpStatus: response.status,
+      retryAfter: response.headers.get('Retry-After'),
+      rawResponse: typeof data === 'string'
+        ? data.slice(0, 1000)
+        : JSON.stringify(data).slice(0, 1000)
+    };
+
     if (!response.ok) {
-      const retryAfter = response.headers.get('Retry-After');
       const error = new Error(`Provider returned HTTP ${response.status}`);
       error.status = response.status;
-      error.retryAfter = retryAfter;
-      error.providerBody = typeof data === 'string' ? data.slice(0, 500) : JSON.stringify(data).slice(0, 500);
+      error.retryAfter = diagnostic.retryAfter;
+      error.providerBody = diagnostic.rawResponse;
+      error.providerDiagnostic = diagnostic;
+
+      console.error('[SPEEDY_YOUNGPG_REQUEST_FAILED]', diagnostic);
+
       throw error;
     }
-    return { data, status: response.status, retryAfter: response.headers.get('Retry-After') };
-  } finally { clearTimeout(timer); }
+
+    return {
+      data,
+      status: response.status,
+      retryAfter: response.headers.get('Retry-After')
+    };
+
+  } catch (error) {
+    if (!error.providerDiagnostic) {
+      console.error('[SPEEDY_YOUNGPG_CONNECTION_ERROR]', {
+        timestamp: new Date().toISOString(),
+        ...requestInfo,
+        errorName: error?.name || 'Error',
+        errorMessage: error?.message || String(error)
+      });
+    }
+
+    throw error;
+
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function providerErrorMessage(error) {
