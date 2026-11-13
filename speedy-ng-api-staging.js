@@ -2978,7 +2978,6 @@ try {
     { country, service }
   );
 } catch (error) {
-  } catch (error) {
   // Do not create an application-level cooldown for YoungPG.
   // Preserve genuine errors returned by the provider.
   return jsonError(
@@ -2987,6 +2986,15 @@ try {
     request
   );
 }
+
+const price = visualPriceEntry(
+  quoteResponse.data,
+  countryName,
+  service,
+  country
+);
+
+if (!price) {
   return jsonError(
     'The live provider price could not be verified. No funds were taken.',
     502,
