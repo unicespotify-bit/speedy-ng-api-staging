@@ -1932,14 +1932,39 @@ async function providerFetch(url, init = {}) {
         : JSON.stringify(data).slice(0, 1000)
     };
 
-    if (!response.ok) {
-      const error = new Error(`Provider returned HTTP ${response.status}`);
+    const providerCodes = [
+      'NO_NUMBERS',
+      'MAX_PRICE_EXCEEDED',
+      'TOO_MANY_REQUESTS',
+      'RENTAL_ERROR_TRY_AGAIN'
+    ];
+
+    const responseText = typeof data === 'string'
+      ? data.trim()
+      : JSON.stringify(data);
+
+    const matchedCode = providerCodes.find(code =>
+      new RegExp(`(^|[^A-Z0-9_])${code}([^A-Z0-9_]|$)`, 'i')
+        .test(responseText)
+    );
+
+    if (!response.ok || matchedCode) {
+      const error = new Error(
+        matchedCode
+          ? `YoungPG returned ${matchedCode}`
+          : `Provider returned HTTP ${response.status}`
+      );
+
       error.status = response.status;
+      error.providerCode = matchedCode || null;
       error.retryAfter = diagnostic.retryAfter;
       error.providerBody = diagnostic.rawResponse;
       error.providerDiagnostic = diagnostic;
 
-      console.error('[SPEEDY_YOUNGPG_REQUEST_FAILED]', diagnostic);
+      console.error('[SPEEDY_YOUNGPG_REQUEST_FAILED]', {
+        ...diagnostic,
+        providerCode: matchedCode || null
+      });
 
       throw error;
     }
@@ -1949,7 +1974,7 @@ async function providerFetch(url, init = {}) {
       status: response.status,
       retryAfter: response.headers.get('Retry-After')
     };
-
+    
   } catch (error) {
     if (!error.providerDiagnostic) {
       console.error('[SPEEDY_YOUNGPG_CONNECTION_ERROR]', {
