@@ -3935,7 +3935,324 @@ async function nexarSocialBoostRoutes(request, env, url, path, method) {
   }
   return null;
 }
+let communicationSchemaReady = null;
 
+async function ensureCommunicationSchema(env) {
+  if (!communicationSchemaReady) {
+    communicationSchemaReady = (async () => {
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS admin_announcements (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          message TEXT NOT NULL,
+          type TEXT NOT NULL DEFAULT 'info',
+          is_active INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          created_by TEXT
+        )
+      `).run();
+
+      await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS support_messages (
+          id TEXT PRIMARY KEY,
+          customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+          sender_type TEXT NOT NULL CHECK (sender_type IN ('customer','admin')),
+          sender_id TEXT NOT NULL,
+          message TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          read_at TEXT
+        )
+      `).run();
+
+      await env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_support_customer_created
+        ON support_messages(customer_id, created_at)
+      `).run();
+
+      await env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_support_unread
+        ON support_messages(sender_type, read_at, customer_id)
+      `).run();
+    })().catch(error => {
+      communicationSchemaReady = null;
+      throw error;
+    });
+  }
+
+  await communicationSchemaReady;
+}
+
+async function supportRoutes(request, env, url, path, method) {
+  const customerAnnouncements = path === "/api/customer/announcements";
+  const customerSupportSettings = path === "/api/customer/support/settings";
+  const customerUnread = path === "/api/customer/support/unread";
+  const customerMessages = path === "/api/customer/support/messages";
+  const adminUnread = path === "/api/admin/support/unread";
+  const adminConversations = path === "/api/admin/support/conversations";
+  const adminConversationMatch = path.match(
+    /^\/api\/admin\/support\/conversations\/([^/]+)$/
+  );
+
+  const isCustomerRoute =
+    customerAnnouncements ||
+    customerSupportSettings ||
+    customerUnread ||
+    customerMessages;
+
+  const isAdminRoute =
+    adminUnread ||
+    adminConversations ||
+    Boolean(adminConversationMatch);
+
+  if (!isCustomerRoute && !isAdminRoute) return null;
+
+  await ensureCommunicationSchema(env);
+
+  if (isCustomerRoute) {
+    const customer = await getCustomer(request, env);
+    if (!customer) {
+      return jsonError("A verified customer login is required.", 401, request);
+    }
+
+    if (customerAnnouncements && method === "GET") {
+      const result = await env.DB.prepare(`
+        SELECT id, title, message, type, created_at
+        FROM admin_announcements
+        WHERE is_active = 1
+        ORDER BY created_at DESC
+        LIMIT 50
+      `).all();
+
+      return respond({
+        ok: true,
+        announcements: result.results || []
+      }, 200, request);
+    }
+
+    if (customerSupportSettings && method === "GET") {
+      const setting = await env.DB.prepare(`
+        SELECT setting_value
+        FROM app_settings
+        WHERE setting_key = 'support_telegram'
+      `).first();
+
+      return respond({
+        ok: true,
+        telegram_url: setting?.setting_value || ""
+      }, 200, request);
+    }
+
+    if (customerUnread && method === "GET") {
+      const result = await env.DB.prepare(`
+        SELECT COUNT(*) AS unread_count
+        FROM support_messages
+        WHERE customer_id = ?
+          AND sender_type = 'admin'
+          AND read_at IS NULL
+      `).bind(customer.id).first();
+
+      return respond({
+        ok: true,
+        unread_count: Number(result?.unread_count || 0)
+      }, 200, request);
+    }
+
+    if (customerMessages && method === "GET") {
+      const now = new Date().toISOString();
+
+      await env.DB.prepare(`
+        UPDATE support_messages
+        SET read_at = ?
+        WHERE customer_id = ?
+          AND sender_type = 'admin'
+          AND read_at IS NULL
+      `).bind(now, customer.id).run();
+
+      const result = await env.DB.prepare(`
+        SELECT id, sender_type, message, created_at, read_at
+        FROM support_messages
+        WHERE customer_id = ?
+        ORDER BY created_at ASC
+        LIMIT 300
+      `).bind(customer.id).all();
+
+      return respond({
+        ok: true,
+        messages: result.results || []
+      }, 200, request);
+    }
+
+    if (customerMessages && method === "POST") {
+      const body = await readBody(request);
+      const message = String(body?.message || "").trim();
+
+      if (!message) {
+        return jsonError("Please enter a message.", 400, request);
+      }
+
+      if (message.length > 3000) {
+        return jsonError("Message must not exceed 3,000 characters.", 400, request);
+      }
+
+      const now = new Date().toISOString();
+      const id = crypto.randomUUID();
+
+      await env.DB.prepare(`
+        INSERT INTO support_messages
+          (id, customer_id, sender_type, sender_id, message, created_at)
+        VALUES (?, ?, 'customer', ?, ?, ?)
+      `).bind(id, customer.id, customer.id, message, now).run();
+
+      return respond({
+        ok: true,
+        message: "Your message has been sent.",
+        id,
+        created_at: now
+      }, 201, request);
+    }
+
+    return jsonError("Method not allowed.", 405, request);
+  }
+
+  const admin = await getAdmin(request, env);
+  if (!admin) {
+    return jsonError("Administrator login required.", 401, request);
+  }
+
+  if (adminUnread && method === "GET") {
+    const result = await env.DB.prepare(`
+      SELECT COUNT(*) AS unread_count
+      FROM support_messages
+      WHERE sender_type = 'customer'
+        AND read_at IS NULL
+    `).first();
+
+    return respond({
+      ok: true,
+      unread_count: Number(result?.unread_count || 0)
+    }, 200, request);
+  }
+
+  if (adminConversations && method === "GET") {
+    const result = await env.DB.prepare(`
+      SELECT
+        c.id AS customer_id,
+        c.email,
+        (
+          SELECT m.message
+          FROM support_messages m
+          WHERE m.customer_id = c.id
+          ORDER BY m.created_at DESC
+          LIMIT 1
+        ) AS last_message,
+        (
+          SELECT m.created_at
+          FROM support_messages m
+          WHERE m.customer_id = c.id
+          ORDER BY m.created_at DESC
+          LIMIT 1
+        ) AS last_message_at,
+        (
+          SELECT COUNT(*)
+          FROM support_messages m
+          WHERE m.customer_id = c.id
+            AND m.sender_type = 'customer'
+            AND m.read_at IS NULL
+        ) AS unread_count
+      FROM customers c
+      WHERE EXISTS (
+        SELECT 1
+        FROM support_messages m
+        WHERE m.customer_id = c.id
+      )
+      ORDER BY last_message_at DESC
+      LIMIT 200
+    `).all();
+
+    return respond({
+      ok: true,
+      conversations: result.results || []
+    }, 200, request);
+  }
+
+  if (adminConversationMatch) {
+    const customerId = decodeURIComponent(adminConversationMatch[1]);
+
+    if (!customerId || customerId.includes("/")) {
+      return jsonError("Invalid customer ID.", 400, request);
+    }
+
+    const customer = await env.DB.prepare(`
+      SELECT id, email
+      FROM customers
+      WHERE id = ?
+    `).bind(customerId).first();
+
+    if (!customer) {
+      return jsonError("Customer not found.", 404, request);
+    }
+
+    if (method === "GET") {
+      const now = new Date().toISOString();
+
+      await env.DB.prepare(`
+        UPDATE support_messages
+        SET read_at = ?
+        WHERE customer_id = ?
+          AND sender_type = 'customer'
+          AND read_at IS NULL
+      `).bind(now, customerId).run();
+
+      const result = await env.DB.prepare(`
+        SELECT id, sender_type, sender_id, message, created_at, read_at
+        FROM support_messages
+        WHERE customer_id = ?
+        ORDER BY created_at ASC
+        LIMIT 300
+      `).bind(customerId).all();
+
+      return respond({
+        ok: true,
+        customer,
+        messages: result.results || []
+      }, 200, request);
+    }
+
+    if (method === "POST") {
+      const body = await readBody(request);
+      const message = String(body?.message || "").trim();
+
+      if (!message) {
+        return jsonError("Please enter a reply.", 400, request);
+      }
+
+      if (message.length > 3000) {
+        return jsonError("Reply must not exceed 3,000 characters.", 400, request);
+      }
+
+      const now = new Date().toISOString();
+      const id = crypto.randomUUID();
+
+      await env.DB.prepare(`
+        INSERT INTO support_messages
+          (id, customer_id, sender_type, sender_id, message, created_at)
+        VALUES (?, ?, 'admin', ?, ?, ?)
+      `).bind(id, customerId, admin.id, message, now).run();
+
+      return respond({
+        ok: true,
+        message: "Your reply has been sent.",
+        id,
+        created_at: now
+      }, 201, request);
+    }
+
+    return jsonError("Method not allowed.", 405, request);
+  }
+
+  return jsonError("Method not allowed.", 405, request);
+}
 async function handle(request, env) {
   if (!env.DB) return jsonError("Database binding DB is missing.", 500, request);
   const origin = request.headers.get("Origin") || "";
