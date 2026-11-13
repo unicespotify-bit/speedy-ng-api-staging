@@ -24,7 +24,7 @@ function corsHeaders(request) {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "Vary": "Origin",
-    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, Idempotency-Key",
     "Access-Control-Allow-Credentials": "true"
   };
@@ -3976,6 +3976,14 @@ const nexarVirtualResponse = await nexarVirtualNumberRoutes(
 if (nexarVirtualResponse) return nexarVirtualResponse;
   const nexarResponse = await nexarSocialBoostRoutes(request, env, url, path, method);
 if (nexarResponse) return nexarResponse;
+  const supportResponse = await supportRoutes(
+  request,
+  env,
+  url,
+  path,
+  method
+);
+if (supportResponse) return supportResponse;
 
   if (method === "POST" && path === "/api/admin/initial-setup") {
     if (!env.ADMIN_SETUP_TOKEN) return jsonError("Configure the ADMIN_SETUP_TOKEN secret first.", 503, request);
@@ -4015,6 +4023,7 @@ if (nexarResponse) return nexarResponse;
 
   const admin = await getAdmin(request, env);
   if (!admin) return jsonError("Administrator login required.", 401, request);
+  await ensureCommunicationSchema(env);
 // Admin announcement management
   if (method === "GET" && path === "/api/admin/announcements") {
     const result = await env.DB.prepare(
