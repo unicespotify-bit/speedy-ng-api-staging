@@ -4269,7 +4269,15 @@ async function handle(request, env) {
     await env.DB.prepare("SELECT 1").first();
     return respond({ ok: true, service: "Speedy.ng API", database: "connected" }, 200, request);
   }
-
+// Handle support inbox before the admin-only fallback.
+const supportResponse = await supportRoutes(
+  request,
+  env,
+  url,
+  path,
+  method
+);
+if (supportResponse) return supportResponse;
   const customerResponse = await customerRoutes(request, env, path, method);
   if (customerResponse) return customerResponse;
 
@@ -4293,14 +4301,6 @@ const nexarVirtualResponse = await nexarVirtualNumberRoutes(
 if (nexarVirtualResponse) return nexarVirtualResponse;
   const nexarResponse = await nexarSocialBoostRoutes(request, env, url, path, method);
 if (nexarResponse) return nexarResponse;
-  const supportResponse = await supportRoutes(
-  request,
-  env,
-  url,
-  path,
-  method
-);
-if (supportResponse) return supportResponse;
 
   if (method === "POST" && path === "/api/admin/initial-setup") {
     if (!env.ADMIN_SETUP_TOKEN) return jsonError("Configure the ADMIN_SETUP_TOKEN secret first.", 503, request);
