@@ -24,7 +24,7 @@ function corsHeaders(request) {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "Vary": "Origin",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, Idempotency-Key",
     "Access-Control-Allow-Credentials": "true"
   };
