@@ -4369,7 +4369,39 @@ if (nexarResponse) return nexarResponse;
       .bind(admin.id, "pricing.rule.updated", JSON.stringify({ provider, product, country, service, markupType, markupValue }).slice(0, 1000), now).run();
     return respond({ ok: true, message: "Pricing rule saved." }, 200, request);
   }
+const pricingRuleDeleteMatch = path.match(/^\/api\/admin\/pricing\/rules\/([^/]+)$/);
 
+  if (method === "DELETE" && pricingRuleDeleteMatch) {
+    const ruleId = decodeURIComponent(pricingRuleDeleteMatch[1]);
+
+    const existing = await env.DB.prepare(
+      "SELECT id, provider, product, country, service FROM pricing_rules WHERE id = ?"
+    ).bind(ruleId).first();
+
+    if (!existing) {
+      return jsonError("Pricing rule not found.", 404, request);
+    }
+
+    const now = new Date().toISOString();
+
+    await env.DB.prepare(
+      "DELETE FROM pricing_rules WHERE id = ?"
+    ).bind(ruleId).run();
+
+    await env.DB.prepare(
+      "INSERT INTO audit_logs (admin_id, action, detail, created_at) VALUES (?, ?, ?, ?)"
+    ).bind(
+      admin.id,
+      "pricing.rule.deleted",
+      JSON.stringify(existing).slice(0, 1000),
+      now
+    ).run();
+
+    return respond({
+      ok: true,
+      message: "Pricing rule removed successfully."
+    }, 200, request);
+  }
   if (method === "GET" && path === "/api/admin/audit") {
     const result = await env.DB.prepare("SELECT action, detail, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 100").all();
     return respond({ ok: true, logs: result.results }, 200, request);
