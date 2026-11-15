@@ -4044,17 +4044,33 @@ async function nexarSocialBoostRoutes(request, env, url, path, method) {
     }
   }
   if (path === '/api/customer/social-boost/services' && method === 'GET') {
-    const customer = await getCustomer(request, env);
-    if (!customer) return jsonError('A verified customer login is required.', 401, request);
-    const driver = url.searchParams.get('driver') === 'nigerian' ? 'nigerian' : 'global';
-    try {
-      const result = await nexarCall(env, 'social-boost/services', { params: { driver } });
-      const data = providerEnvelope(result.data);
-      const services = Array.isArray(data) ? data : (data?.services || data?.data || []);
-      return respond({ ok: true, driver, services, request_id: result.data?.request_id || null }, 200, request);
-    } catch (error) {
-      return jsonError(providerErrorMessage(error), error?.status === 429 ? 429 : 502, request);
-    }
+  const customer = await getCustomer(request, env);
+
+  if (!customer) {
+    return jsonError('A verified customer login is required.', 401, request);
+  }
+
+  const driver = url.searchParams.get('driver') === 'nigerian'
+    ? 'nigerian'
+    : 'global';
+
+  try {
+    const services = await nexarSocialBoostServicesCached(env, driver);
+
+    return respond({
+      ok: true,
+      driver,
+      services,
+      request_id: null
+    }, 200, request);
+
+  } catch (error) {
+    return jsonError(
+      providerErrorMessage(error),
+      error?.status === 429 ? 429 : 502,
+      request
+    );
+  }
   }
   if (path === '/api/admin/providers/test' && method === 'POST') {
     const body = await readBody(request);
