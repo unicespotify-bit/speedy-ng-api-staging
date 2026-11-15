@@ -3222,6 +3222,7 @@ if (!price) {
     });
   } catch (error) {
     // Refund only deterministic provider rejections that confirm no rental was issued.
+    const providerDeclined = [
   'NO_NUMBERS',
   'MAX_PRICE_EXCEEDED',
   'TOO_MANY_REQUESTS'
