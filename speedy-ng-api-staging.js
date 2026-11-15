@@ -3183,7 +3183,21 @@ if (!price) {
     request
   );
 }
-  if (price.stock !== null && price.stock < 1) return jsonError('This service is currently out of stock. No funds were taken.', 409, request);
+  if (price.stock === null || !Number.isFinite(price.stock)) {
+  return jsonError(
+    'Live stock could not be verified for this service. No funds were taken. Please try again later.',
+    503,
+    request
+  );
+}
+
+if (price.stock < 1) {
+  return jsonError(
+    'This service is currently out of stock. No funds were taken.',
+    409,
+    request
+  );
+}
   const setting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='usd_ngn_rate'").first();
   const rate = Number(setting?.setting_value || 1500);
   if (!Number.isFinite(rate) || rate <= 0) return jsonError('The NGN/USD exchange rate is not configured.', 503, request);
