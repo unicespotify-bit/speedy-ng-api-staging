@@ -3112,16 +3112,84 @@ if (!price) {
 
   let rented;
   try { rented = await youngpgVirtualCall(env, 'getNumber', { country, service }); }
+  
   catch (error) {
-    if (error.status === 429) {
-      await env.DB.prepare("UPDATE orders SET status='review', failure_reason=?, updated_at=? WHERE id=? AND status='processing'")
-        .bind('Provider rate limit interrupted the rental request; check provider status before any retry.', new Date().toISOString(), orderId).run();
-      return respond({ ok: false, order_id: orderId, status: 'review', message: 'The rental result is uncertain. Your funds are held safely while it is checked. Do not submit another rental.' }, 202, request);
+    const providerDeclined =
+      error?.status === 429 ||
+      [
+        'NO_NUMBERS',
+        'MAX_PRICE_EXCEEDED',
+        'TOO_MANY_REQUESTS',
+        'RENTAL_ERROR_TRY_AGAIN'
+      ].includes(error?.providerCode);
+
+    if (providerDeclined) {
+      const declinedAt = new Date().toISOString();
+      const providerReason = String(
+        error?.providerCode || 'HTTP 429'
+      );
+
+      const marked = await env.DB.prepare(`
+        UPDATE orders
+        SET provider_refund_confirmed=1,
+            provider_refund_at=?,
+            expires_at=?,
+            failure_reason=?,
+            updated_at=?
+        WHERE id=? AND status='processing'
+      `).bind(
+        declinedAt,
+        declinedAt,
+        `YoungPG explicitly declined rental: ${providerReason}`,
+        declinedAt,
+        orderId
+      ).run();
+
+      if (Number(marked?.meta?.changes || 0) === 1) {
+        const refunded = await refundVisualOrder(
+          env,
+          customer.id,
+          orderId,
+          `YoungPG declined rental: ${providerReason}`
+        );
+
+        if (refunded) {
+          return jsonError(
+            'YoungPG could not issue this number. Your USD wallet has been restored. You can try again later.',
+            502,
+            request
+          );
+        }
+      }
+
+      return respond({
+        ok: false,
+        order_id: orderId,
+        status: 'review',
+        message: 'The provider declined the rental, but the wallet refund needs reconciliation. Your funds remain protected. Please do not submit another rental yet.'
+      }, 202, request);
     }
-    await env.DB.prepare("UPDATE orders SET status='review', failure_reason=?, updated_at=? WHERE id=? AND status='processing'")
-      .bind('The provider request timed out or failed after dispatch. The rental may have been created; reconciliation is required before any refund or retry.', new Date().toISOString(), orderId).run();
-    return respond({ ok: false, order_id: orderId, status: 'review', message: 'The rental result is uncertain. Your funds are held safely while it is checked. Do not submit another rental.' }, 202, request);
+
+    await env.DB.prepare(`
+      UPDATE orders
+      SET status='review',
+          failure_reason=?,
+          updated_at=?
+      WHERE id=? AND status='processing'
+    `).bind(
+      'The provider request timed out or failed after dispatch. The rental may have been created; reconciliation is required before any refund or retry.',
+      new Date().toISOString(),
+      orderId
+    ).run();
+
+    return respond({
+      ok: false,
+      order_id: orderId,
+      status: 'review',
+      message: 'The rental result is uncertain. Your funds are held safely while it is checked. Do not submit another rental.'
+    }, 202, request);
   }
+
   const token = String(rented.data || '').trim();
   const match = token.match(/^ACCESS_NUMBER:([^:]+):(.+)$/);
   if (!match) {
