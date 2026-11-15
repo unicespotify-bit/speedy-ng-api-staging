@@ -3114,14 +3114,13 @@ if (!price) {
   try { rented = await youngpgVirtualCall(env, 'getNumber', { country, service }); }
   
   catch (error) {
-    const providerDeclined =
-      error?.status === 429 ||
-      [
-        'NO_NUMBERS',
-        'MAX_PRICE_EXCEEDED',
-        'TOO_MANY_REQUESTS',
-        'RENTAL_ERROR_TRY_AGAIN'
-      ].includes(error?.providerCode);
+    // Refund only deterministic provider rejections that confirm no rental was issued.
+// HTTP 429 and RENTAL_ERROR_TRY_AGAIN remain in review until reconciled.
+const providerDeclined = [
+  'NO_NUMBERS',
+  'MAX_PRICE_EXCEEDED',
+  'TOO_MANY_REQUESTS'
+].includes(error?.providerCode);
 
     if (providerDeclined) {
       const declinedAt = new Date().toISOString();
