@@ -2925,7 +2925,45 @@ if (!price) {
       return respond({ ok: true, order: customerSafeOrder(order), delivery }, 200, request);
     }
     if (method !== 'POST' || parts.length !== 2 || !['check','cancel'].includes(parts[1])) return jsonError('Method not allowed.', 405, request);
-    if (!order.provider_order_id) return respond({ ok: false, status: order.status, message: 'This order has no confirmed provider rental ID and needs reconciliation. Do not place it again.' }, 202, request);
+    if (
+  !order.provider_order_id &&
+  Number(order.provider_refund_confirmed || 0) === 1
+) {
+  const refundReady = Boolean(
+    order.expires_at &&
+    Date.now() >= Date.parse(order.expires_at)
+  );
+
+  const refunded = refundReady
+    ? await refundVisualOrder(
+        env,
+        customer.id,
+        orderId,
+        'Confirmed YoungPG rental rejection. Customer refund processed.'
+      )
+    : false;
+
+  const latest = await getVisualOrder(env, customer.id, orderId);
+
+  return respond({
+    ok: true,
+    status: latest?.status || order.status,
+    order: customerSafeOrder(latest),
+    refunded,
+    refund_available: false,
+    message: refunded
+      ? 'Your USD wallet has been refunded.'
+      : 'Your refund has been confirmed and is being processed. Your funds remain protected.'
+  }, 200, request);
+}
+
+if (!order.provider_order_id) {
+  return respond({
+    ok: false,
+    status: order.status,
+    message: 'This order has no confirmed provider rental ID and needs reconciliation. Do not place it again.'
+  }, 202, request);
+}
     if (order.status === 'completed' || order.status === 'failed') {
       let delivery = null; try { delivery = order.delivery_json ? JSON.parse(order.delivery_json) : null; } catch {}
       return respond({ ok: true, order: { ...order, delivery_json: undefined }, delivery }, 200, request);
@@ -4892,7 +4930,10 @@ async function processExpiredVisualNumberOrders(env) {
     WHERE category='visual_numbers'
       AND provider='youngpg_virtual'
       AND status IN ('processing','review')
-      AND provider_order_id IS NOT NULL
+      AND (
+  provider_order_id IS NOT NULL
+  OR COALESCE(provider_refund_confirmed, 0) = 1
+)
       AND (
         COALESCE(provider_refund_confirmed, 0) = 1
         OR provider_cancel_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
