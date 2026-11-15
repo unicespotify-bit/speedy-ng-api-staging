@@ -3214,15 +3214,15 @@ if (!price) {
   if (Number(reserved[1]?.meta?.changes || 0) !== 1) return jsonError('Your USD wallet balance is not enough for this rental.', 409, request);
 
   let rented;
-  try { const providerOrderReference = orderId
-  .replace(/-/g, '')
-  .slice(0, 24);
 
-rented = await youngpgVirtualCall(env, 'getNumber', {
-  country,
-  service,
-  order_id: providerOrderReference
-}); }
+try {
+  rented = await youngpgVirtualCall(env, 'getNumber', {
+    country,
+    service
+  });
+}
+catch (error) {
+  // Keep the existing error handling below this point.
   
   catch (error) {
     // Refund only deterministic provider rejections that confirm no rental was issued.
