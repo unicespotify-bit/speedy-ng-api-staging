@@ -3215,12 +3215,17 @@ if (!price) {
 
     let rented;
 
-  try {
-    rented = await youngpgVirtualCall(env, 'getNumber', {
-      country,
-      service
-    });
-  } catch (error) {
+try {
+  const providerOrderReference = orderId
+    .replace(/-/g, '')
+    .slice(0, 24);
+
+  rented = await youngpgVirtualCall(env, 'getNumber', {
+    country,
+    service,
+    order_id: providerOrderReference
+  });
+} catch (error) {
     // Refund only deterministic provider rejections that confirm no rental was issued.
     const providerDeclined = [
   'NO_NUMBERS',
