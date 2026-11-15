@@ -1934,7 +1934,7 @@ async function providerFetch(url, init = {}) {
     };
 
     
-        const providerCodes = [
+            const providerCodes = [
       'BAD_KEY',
       'BAD_ACTION',
       'BAD_SERVICE',
@@ -1956,7 +1956,17 @@ async function providerFetch(url, init = {}) {
         .test(responseText)
     );
 
-    if (!response.ok || matchedCode) {
+    const catalogueError =
+      data &&
+      typeof data === 'object' &&
+      String(data.status || '').toLowerCase() === 'error';
+
+    const providerMessage =
+      data && typeof data === 'object'
+        ? String(data.message || data.error || data.detail || '')
+        : '';
+
+    if (!response.ok || matchedCode || catalogueError) {
       const rateLimited =
         response.status === 429 ||
         matchedCode === 'TOO_MANY_REQUESTS';
@@ -1964,6 +1974,7 @@ async function providerFetch(url, init = {}) {
       const error = new Error(
         `YoungPG returned ${
           matchedCode ||
+          providerMessage ||
           `HTTP ${response.status}`
         }`
       );
@@ -1979,7 +1990,8 @@ async function providerFetch(url, init = {}) {
 
       console.error('[SPEEDY_YOUNGPG_REQUEST_FAILED]', {
         ...diagnostic,
-        providerCode: matchedCode || null
+        providerCode: matchedCode || null,
+        catalogueError
       });
 
       throw error;
