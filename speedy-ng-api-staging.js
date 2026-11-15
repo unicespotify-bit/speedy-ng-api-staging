@@ -11,6 +11,7 @@
  * guarded Social Logs purchases and delivery history. Nexar Social Boost catalogue diagnostics are included; live purchases remain disabled pending verified credentials and price-currency mapping. Automatic Social Logs refunds are not enabled.
  */
 const YOUNGPG_CATALOGUE_CACHE = new Map();
+const NEXAR_SOCIAL_BOOST_CATALOGUE_CACHE = new Map();
 const ALLOWED_ORIGINS = new Set([
   "https://speedy-ng-admin.pages.dev",
   "https://speedy-ng-admin-staging.pages.dev",
@@ -3686,6 +3687,54 @@ async function nexarCall(env, endpoint, { method = 'GET', params = {}, body, ide
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
   return providerFetch(url.toString(), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+}
+// Cache successful Nexar Social Boosting catalogue reads for 60 seconds.
+// Deduplicate simultaneous catalogue requests within this Worker isolate.
+// Never use this cache to authorize a purchase or determine its purchase price.
+async function nexarSocialBoostServicesCached(env, driver) {
+  const cacheKey = driver === 'nigerian' ? 'nigerian' : 'global';
+  const ttlMs = 60 * 1000;
+
+  const cached = NEXAR_SOCIAL_BOOST_CATALOGUE_CACHE.get(cacheKey);
+
+  if (cached?.value && cached.expiresAt > Date.now()) {
+    return cached.value;
+  }
+
+  if (cached?.pending) {
+    return cached.pending;
+  }
+
+  const pending = (async () => {
+    const result = await nexarCall(
+      env,
+      'social-boost/services',
+      { params: { driver: cacheKey } }
+    );
+
+    const data = providerEnvelope(result.data);
+    const services = Array.isArray(data)
+      ? data
+      : (data?.services || data?.data || []);
+
+    if (!Array.isArray(services)) {
+      throw new Error('Nexar returned an invalid Social Boosting catalogue.');
+    }
+
+    NEXAR_SOCIAL_BOOST_CATALOGUE_CACHE.set(cacheKey, {
+      value: services,
+      expiresAt: Date.now() + ttlMs
+    });
+
+    return services;
+  })().catch(error => {
+    NEXAR_SOCIAL_BOOST_CATALOGUE_CACHE.delete(cacheKey);
+    throw error;
+  });
+
+  NEXAR_SOCIAL_BOOST_CATALOGUE_CACHE.set(cacheKey, { pending });
+
+  return pending;
 }
 async function nexarVirtualNumberRoutes(request, env, url, path, method) {
   const base = '/api/customer/official-numbers';
