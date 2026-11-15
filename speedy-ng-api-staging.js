@@ -2515,10 +2515,13 @@ function visualPriceEntry(raw, country, service, countryId = country) {
     add(findKey(countryNode.services, service));
   }
 
-  const serviceNode = findKey(root, service);
+    const serviceNode = findKey(root, service);
 
   add(findKey(serviceNode, country));
   add(findKey(serviceNode, countryId));
+
+  // Restore the original YoungPG service-level price lookup.
+  add(serviceNode);
 
   if (Array.isArray(root)) {
     for (const item of root) {
