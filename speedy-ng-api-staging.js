@@ -1956,15 +1956,56 @@ async function providerFetch(url, init = {}) {
         .test(responseText)
     );
 
-    const catalogueError =
-      data &&
-      typeof data === 'object' &&
-      String(data.status || '').toLowerCase() === 'error';
+        const providerCodes = [
+      'BAD_KEY',
+      'BAD_ACTION',
+      'BAD_SERVICE',
+      'BAD_COUNTRY',
+      'BAD_PERIOD',
+      'NO_BALANCE',
+      'NO_NUMBERS',
+      'MAX_PRICE_EXCEEDED',
+      'TOO_MANY_REQUESTS',
+      'RENTAL_ERROR_TRY_AGAIN'
+    ];
 
-    const providerMessage =
-      data && typeof data === 'object'
-        ? String(data.message || data.error || data.detail || '')
-        : '';
+    const responseText = typeof data === 'string'
+      ? data.trim()
+      : JSON.stringify(data);
+
+    const matchedCode = providerCodes.find(code =>
+      new RegExp(`(^|[^A-Z0-9_])${code}([^A-Z0-9_]|$)`, 'i')
+        .test(responseText)
+    );
+
+    if (!response.ok || matchedCode) {
+      const rateLimited =
+        response.status === 429 ||
+        matchedCode === 'TOO_MANY_REQUESTS';
+
+      const error = new Error(
+        `YoungPG returned ${
+          matchedCode ||
+          `HTTP ${response.status}`
+        }`
+      );
+
+      error.status = rateLimited
+        ? 429
+        : (response.ok ? 502 : response.status);
+
+      error.providerCode = matchedCode || null;
+      error.retryAfter = diagnostic.retryAfter;
+      error.providerBody = diagnostic.rawResponse;
+      error.providerDiagnostic = diagnostic;
+
+      console.error('[SPEEDY_YOUNGPG_REQUEST_FAILED]', {
+        ...diagnostic,
+        providerCode: matchedCode || null
+      });
+
+      throw error;
+    }
 
     if (!response.ok || matchedCode || catalogueError) {
       const rateLimited =
