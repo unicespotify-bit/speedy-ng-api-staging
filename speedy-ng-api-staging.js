@@ -2448,7 +2448,41 @@ function visualPriceEntry(raw, country, service, countryId = country) {
 
   const root = providerEnvelope(data);
   const candidates = [];
+  // Accept a direct YoungPG price object when it belongs
+  // to the country and service requested by the customer.
+  if (
+    root &&
+    typeof root === 'object' &&
+    !Array.isArray(root)
+  ) {
+    const rootCountry = String(
+      root.country ?? root.country_id ?? root.country_code ?? ''
+    ).trim().toLowerCase();
 
+    const rootService = String(
+      root.service ?? root.service_code ?? root.code ?? ''
+    ).trim().toLowerCase();
+
+    const countryMatches =
+      !rootCountry ||
+      rootCountry === String(country).trim().toLowerCase() ||
+      rootCountry === String(countryId).trim().toLowerCase();
+
+    const serviceMatches =
+      !rootService ||
+      rootService === String(service).trim().toLowerCase();
+
+    const hasDirectPrice =
+      root.cost !== undefined ||
+      root.price_ngn !== undefined ||
+      root.price !== undefined ||
+      root.amount !== undefined ||
+      root.retail_price !== undefined;
+
+    if (countryMatches && serviceMatches && hasDirectPrice) {
+      candidates.push(root);
+    }
+  }
   const normalizeKey = value =>
     String(value ?? '')
       .trim()
