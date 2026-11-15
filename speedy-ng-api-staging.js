@@ -1933,7 +1933,14 @@ async function providerFetch(url, init = {}) {
         : JSON.stringify(data).slice(0, 1000)
     };
 
+    
     const providerCodes = [
+      'BAD_KEY',
+      'BAD_ACTION',
+      'BAD_SERVICE',
+      'BAD_COUNTRY',
+      'BAD_PERIOD',
+      'NO_BALANCE',
       'NO_NUMBERS',
       'MAX_PRICE_EXCEEDED',
       'TOO_MANY_REQUESTS',
@@ -1949,14 +1956,33 @@ async function providerFetch(url, init = {}) {
         .test(responseText)
     );
 
-    if (!response.ok || matchedCode) {
+    const catalogueError =
+      data &&
+      typeof data === 'object' &&
+      String(data.status || '').toLowerCase() === 'error';
+
+    const providerMessage =
+      data && typeof data === 'object'
+        ? String(data.message || data.error || data.detail || '')
+        : '';
+
+    if (!response.ok || matchedCode || catalogueError) {
+      const rateLimited =
+        response.status === 429 ||
+        matchedCode === 'TOO_MANY_REQUESTS';
+
       const error = new Error(
-        matchedCode
-          ? `YoungPG returned ${matchedCode}`
-          : `Provider returned HTTP ${response.status}`
+        `YoungPG returned ${
+          matchedCode ||
+          providerMessage ||
+          `HTTP ${response.status}`
+        }`
       );
 
-      error.status = response.status;
+      error.status = rateLimited
+        ? 429
+        : (response.ok ? 502 : response.status);
+
       error.providerCode = matchedCode || null;
       error.retryAfter = diagnostic.retryAfter;
       error.providerBody = diagnostic.rawResponse;
@@ -1964,7 +1990,8 @@ async function providerFetch(url, init = {}) {
 
       console.error('[SPEEDY_YOUNGPG_REQUEST_FAILED]', {
         ...diagnostic,
-        providerCode: matchedCode || null
+        providerCode: matchedCode || null,
+        catalogueError
       });
 
       throw error;
@@ -3150,7 +3177,15 @@ if (!price) {
   if (Number(reserved[1]?.meta?.changes || 0) !== 1) return jsonError('Your USD wallet balance is not enough for this rental.', 409, request);
 
   let rented;
-  try { rented = await youngpgVirtualCall(env, 'getNumber', { country, service }); }
+  try { const providerOrderReference = orderId
+  .replace(/-/g, '')
+  .slice(0, 24);
+
+rented = await youngpgVirtualCall(env, 'getNumber', {
+  country,
+  service,
+  order_id: providerOrderReference
+}); }
   
   catch (error) {
     // Refund only deterministic provider rejections that confirm no rental was issued.
