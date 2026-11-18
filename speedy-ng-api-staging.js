@@ -4938,7 +4938,9 @@ async function handle(request, env) {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = request.method;
-
+if (method === "POST" && path === "/api/webhooks/nexar") {
+  return await processNexarWebhook(request, env);
+}
   if (method === "POST" && path === "/api/webhooks/flutterwave") {
     return await processFlutterwaveWebhook(request, env);
   }
