@@ -5680,13 +5680,28 @@ if (method === "PATCH" && nexarReadMatch) {
     const rows = await env.DB.prepare("SELECT provider, product, enabled, verification_status, last_test_at, last_test_message FROM provider_configs ORDER BY provider, product").all();
     const configs = rows.results || [];
     const find = (provider, product, legacyProvider = null) => configs.find(x => String(x.provider).toLowerCase() === provider && String(x.product).toLowerCase() === product) || (legacyProvider ? configs.find(x => String(x.provider).toLowerCase() === legacyProvider && String(x.product).toLowerCase() === product) : null) || null;
-    return respond({ ok: true, providers: {
-      youngpg: { visualNumbers: find("youngpg_virtual", "visual_numbers", "youngpg"), socialLogs: find("youngpg_media", "social_logs", "youngpg") },
-      nexar: {
-  officialNumbers: find("nexar", "official_numbers") || { status: "not_tested", enabled: 0, verification_status: "not_configured" },
-  socialBoosting: find("nexar", "social_boosting") || { status: "not_tested", enabled: 0, verification_status: "not_configured" }
+    return respond({
+      ok: true,
+      providers: {
+        youngpg: {
+          visualNumbers: find("youngpg_virtual", "visual_numbers", "youngpg"),
+          socialLogs: find("youngpg_media", "social_logs", "youngpg")
+        },
+        nexar: {
+          officialNumbers: find("nexar", "official_numbers") || {
+            status: "not_tested",
+            enabled: 0,
+            verification_status: "not_configured"
+          },
+          socialBoosting: find("nexar", "social_boosting") || {
+            status: "not_tested",
+            enabled: 0,
+            verification_status: "not_configured"
+          }
+        }
       }
-
+    }, 200, request);
+  }
   if (method === "GET" && path === "/api/admin/pricing/rules") {
     const result = await env.DB.prepare("SELECT * FROM pricing_rules ORDER BY provider, product, country, service LIMIT 1000").all();
     return respond({ ok: true, rules: result.results || [] }, 200, request);
