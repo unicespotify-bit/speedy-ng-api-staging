@@ -5682,9 +5682,10 @@ if (method === "PATCH" && nexarReadMatch) {
     const find = (provider, product, legacyProvider = null) => configs.find(x => String(x.provider).toLowerCase() === provider && String(x.product).toLowerCase() === product) || (legacyProvider ? configs.find(x => String(x.provider).toLowerCase() === legacyProvider && String(x.product).toLowerCase() === product) : null) || null;
     return respond({ ok: true, providers: {
       youngpg: { visualNumbers: find("youngpg_virtual", "visual_numbers", "youngpg"), socialLogs: find("youngpg_media", "social_logs", "youngpg") },
-      nexar: { officialNumbers: { status: "pending_api_access" }, socialBoosting: find("nexar", "social_boosting") || { status: "not_tested", enabled: 0, verification_status: "not_configured" } }
-    } }, 200, request);
-  }
+      nexar: {
+  officialNumbers: find("nexar", "official_numbers") || { status: "not_tested", enabled: 0, verification_status: "not_configured" },
+  socialBoosting: find("nexar", "social_boosting") || { status: "not_tested", enabled: 0, verification_status: "not_configured" }
+      }
 
   if (method === "GET" && path === "/api/admin/pricing/rules") {
     const result = await env.DB.prepare("SELECT * FROM pricing_rules ORDER BY provider, product, country, service LIMIT 1000").all();
