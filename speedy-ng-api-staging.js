@@ -322,7 +322,105 @@ async function hmacSha256Base64(secret, rawBody) {
   const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody));
   return btoa(String.fromCharCode(...new Uint8Array(signature)));
 }
+async function ensureNexarWebhookSchema(env) {
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS nexar_webhook_events (
+      event_id TEXT PRIMARY KEY,
+      event_type TEXT NOT NULL,
+      order_reference TEXT,
+      customer_reference TEXT,
+      processing_status TEXT NOT NULL DEFAULT 'received',
+      payload_json TEXT NOT NULL,
+      received_at TEXT NOT NULL,
+      read_at TEXT
+    )
+  `).run();
+}
 
+async function processNexarWebhook(request, env) {
+  if (request.method !== "POST") {
+    return new Response("Method not allowed", { status: 405 });
+  }
+
+  const secret = String(env.NEXAR_WEBHOOK_SECRET || "").trim();
+
+  if (!secret) {
+    return new Response("Webhook secret is not configured", { status: 503 });
+  }
+
+  const rawBody = await request.text();
+  const timestamp = request.headers.get("X-Nexar-Timestamp") || "";
+  const supplied = request.headers.get("X-Nexar-Signature") || "";
+
+  if (!timestamp || !/^sha256=[a-f0-9]{64}$/i.test(supplied)) {
+    return new Response("Invalid signature", { status: 401 });
+  }
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const signed = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(timestamp + "." + rawBody)
+  );
+
+  const expected = "sha256=" +
+    Array.from(new Uint8Array(signed))
+      .map(byte => byte.toString(16).padStart(2, "0"))
+      .join("");
+
+  if (!safeStringEqual(supplied.toLowerCase(), expected)) {
+    return new Response("Invalid signature", { status: 401 });
+  }
+
+  let payload;
+
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    return new Response("Invalid JSON", { status: 400 });
+  }
+
+  const eventId = String(
+    request.headers.get("X-Nexar-Event-Id") ||
+    payload?.id ||
+    ""
+  ).trim().slice(0, 200);
+
+  if (!eventId) {
+    return new Response("Missing event ID", { status: 400 });
+  }
+
+  const data = payload?.data || {};
+  const now = new Date().toISOString();
+
+  await ensureNexarWebhookSchema(env);
+
+  await env.DB.prepare(`
+    INSERT OR IGNORE INTO nexar_webhook_events
+      (event_id, event_type, order_reference,
+       customer_reference, processing_status,
+       payload_json, received_at)
+    VALUES (?, ?, ?, ?, 'received', ?, ?)
+  `).bind(
+    eventId,
+    String(payload?.event || "unknown").slice(0, 100),
+    data.reference ? String(data.reference).slice(0, 200) : null,
+    data.customer_reference
+      ? String(data.customer_reference).slice(0, 100)
+      : null,
+    rawBody.slice(0, 100000),
+    now
+  ).run();
+
+  return new Response("OK", { status: 200 });
+}
 async function processFlutterwaveWebhook(request, env) {
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
   const secret = env.FLW_WEBHOOK_SECRET || env.FLW_SECRET_HASH;
