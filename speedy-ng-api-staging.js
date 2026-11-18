@@ -4075,12 +4075,12 @@ const countryName = url.searchParams.get('country_name') || country;
     }
   }
 
-  const body = await readBody(request);
-  const product = String(body?.product || '').toLowerCase();
+  const body = await request.clone().json();
+const product = String(body?.product || '').toLowerCase();
 
-  if (!['visual_numbers', 'social_logs'].includes(product)) {
-    return jsonError('Choose visual_numbers or social_logs.', 400, request);
-  }
+if (!['visual_numbers', 'social_logs'].includes(product)) {
+  return null;
+}
 
   const provider = product === 'visual_numbers'
     ? 'youngpg_virtual'
