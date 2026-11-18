@@ -12,6 +12,7 @@
  */
 const YOUNGPG_CATALOGUE_CACHE = new Map();
 const NEXAR_SOCIAL_BOOST_CATALOGUE_CACHE = new Map();
+const NEXAR_VIRTUAL_NUMBER_CATALOGUE_CACHE = new Map();
 const ALLOWED_ORIGINS = new Set([
   "https://speedy-ng-admin.pages.dev",
   "https://speedy-ng-admin-staging.pages.dev",
@@ -5311,6 +5312,10 @@ if (supportResponse) return supportResponse;
   if (providerCustomerResponse) return providerCustomerResponse;
 
   const providerAdminResponse = await youngpgAdminRoutes(request, env, url, path, method);
+  const nexarAdminCatalogueResponse = await nexarAdminVirtualNumberRoutes(
+  request, env, url, path, method
+);
+if (nexarAdminCatalogueResponse) return nexarAdminCatalogueResponse;
   if (providerAdminResponse) return providerAdminResponse;
 const nexarVirtualResponse = await nexarVirtualNumberRoutes(
   request,
