@@ -3986,15 +3986,117 @@ const countryName = url.searchParams.get('country_name') || country;
 
 
 // Nexar Prime Social Boost catalogue and connection diagnostics.
-async function nexarCall(env, endpoint, { method = 'GET', params = {}, body, idempotencyKey } = {}) {
-  if (!env.NEXAR_API_KEY) throw new Error('Nexar Prime API key is not configured.');
-  if (!/^nx_live_[A-Za-z0-9_-]{16,}$/.test(env.NEXAR_API_KEY)) throw new Error('Nexar API key format is invalid.');
-  const url = new URL(endpoint.replace(/^\//, ''), 'https://resellers.nexarhq.com/api/v1/reseller/');
-  for (const [k,v] of Object.entries(params)) if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, String(v));
-  const headers = { 'X-API-Key': env.NEXAR_API_KEY, 'Accept': 'application/json' };
-  if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (idempotencyKey) headers['Idempotency-Key'] = idempotencyKey;
-  return providerFetch(url.toString(), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+async function nexarCall(env, endpoint, {
+  method = 'GET',
+  params = {},
+  body,
+  idempotencyKey
+} = {}) {
+  const apiKey = String(env.NEXAR_API_KEY || '').trim();
+
+  if (!apiKey || /\s/.test(apiKey)) {
+    throw new Error(
+      'Nexar API key is not configured correctly in the staging Worker.'
+    );
+  }
+
+  const url = new URL(
+    endpoint.replace(/^\//, ''),
+    'https://be.nexarhq.com/api/v1/reseller/'
+  );
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(key, String(value));
+    }
+  }
+
+  const headers = {
+    'X-API-Key': apiKey,
+    'Accept': 'application/json'
+  };
+
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  if (idempotencyKey) {
+    headers['Idempotency-Key'] = idempotencyKey;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const response = await fetch(url.toString(), {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal
+    });
+
+    const responseText = await response.text();
+    let data = responseText;
+
+    try {
+      data = responseText ? JSON.parse(responseText) : {};
+    } catch {}
+
+    const envelope =
+      data && typeof data === 'object' ? data : {};
+
+    if (!response.ok || envelope.success === false) {
+      const message = String(
+        envelope.message ||
+        envelope.error ||
+        `Nexar request failed (HTTP ${response.status}).`
+      );
+
+      const error = new Error(message.slice(0, 500));
+      error.status = response.status;
+      error.retryAfter = response.headers.get('Retry-After');
+      error.retryable =
+        envelope.retryable === true ||
+        response.status === 429 ||
+        response.status >= 500;
+
+      console.error('[SPEEDY_NEXAR_REQUEST_FAILED]', {
+        timestamp: new Date().toISOString(),
+        endpoint: endpoint.replace(/^\//, '').split('?')[0],
+        method,
+        httpStatus: response.status,
+        retryAfter: error.retryAfter,
+        requestId:
+          envelope.request_id ||
+          response.headers.get('X-Request-ID') ||
+          null,
+        retryable: error.retryable
+      });
+
+      throw error;
+    }
+
+    return {
+      data,
+      status: response.status,
+      retryAfter: response.headers.get('Retry-After')
+    };
+
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(
+        'Nexar request timed out. The request outcome may need reconciliation.'
+      );
+
+      timeoutError.retryable = true;
+      throw timeoutError;
+    }
+
+    throw error;
+
+  } finally {
+    clearTimeout(timer);
+  }
 }
 // Cache successful Nexar Social Boosting catalogue reads for 60 seconds.
 // Deduplicate simultaneous catalogue requests within this Worker isolate.
