@@ -4683,36 +4683,142 @@ async function nexarSocialBoostRoutes(request, env, url, path, method) {
   }
   }
   if (path === '/api/admin/providers/test' && method === 'POST') {
-    const body = await readBody(request);
-    if (String(body?.product || '') !== 'social_boosting') return null;
-    const admin = await getAdmin(request, env);
-    if (!admin) return jsonError('Administrator login required.', 401, request);
-    try {
-      const accountResponse = await nexarCall(env, 'account');
-      const accountData = providerEnvelope(accountResponse.data);
-      const servicesResponse = await nexarCall(env, 'social-boost/services', { params: { driver: 'global' } });
-      const servicesData = providerEnvelope(servicesResponse.data);
-      const services = Array.isArray(servicesData) ? servicesData : (servicesData?.services || servicesData?.data || []);
-      const message = `Connected. Account verified; ${Array.isArray(services) ? services.length : 0} global services returned.`;
-      const now = new Date().toISOString();
-      await env.DB.prepare(`INSERT INTO provider_configs
-        (id, provider, product, base_url, api_key_enc, extra_enc, enabled, verification_status, last_test_at, last_test_message, updated_at)
-        VALUES (?, 'nexar', 'social_boosting', 'https://resellers.nexarhq.com/api/v1/reseller/', '', '', 1, 'connected', ?, ?, ?)
-        ON CONFLICT(provider, product) DO UPDATE SET enabled=1, verification_status='connected', last_test_at=excluded.last_test_at, last_test_message=excluded.last_test_message, updated_at=excluded.updated_at`)
-        .bind(crypto.randomUUID(), now, message, now).run();
-      await env.DB.prepare('INSERT INTO audit_logs (admin_id, action, detail, created_at) VALUES (?, ?, ?, ?)')
-        .bind(admin.id, 'provider.connection_test', JSON.stringify({ provider: 'nexar', product: 'social_boosting', result: 'connected', account: accountData?.account?.business_name || null }), now).run();
-      return respond({ ok: true, provider: 'nexar', product: 'social_boosting', status: 'connected', message }, 200, request);
-    } catch (error) {
-      const message = providerErrorMessage(error); const now = new Date().toISOString();
-      try { await env.DB.prepare(`INSERT INTO provider_configs
-        (id, provider, product, base_url, api_key_enc, extra_enc, enabled, verification_status, last_test_at, last_test_message, updated_at)
-        VALUES (?, 'nexar', 'social_boosting', 'https://resellers.nexarhq.com/api/v1/reseller/', '', '', 0, 'error', ?, ?, ?)
-        ON CONFLICT(provider, product) DO UPDATE SET enabled=0, verification_status='error', last_test_at=excluded.last_test_at, last_test_message=excluded.last_test_message, updated_at=excluded.updated_at`)
-        .bind(crypto.randomUUID(), now, message, now).run(); } catch {}
-      return jsonError(message, error?.status === 429 ? 429 : 502, request);
-    }
+const body = await readBody(request);
+const product = String(body?.product || '');
+
+if (!['social_boosting', 'official_numbers'].includes(product)) {
+  return null;
+}
+
+const admin = await getAdmin(request, env);
+if (!admin) {
+  return jsonError('Administrator login required.', 401, request);
+}
+
+const now = new Date().toISOString();
+const baseUrl = 'https://be.nexarhq.com/api/v1/reseller/';
+
+try {
+  const accountResponse = await nexarCall(env, 'account');
+  const accountData = providerEnvelope(accountResponse.data);
+
+  let message = '';
+
+  if (product === 'social_boosting') {
+    const servicesResponse = await nexarCall(
+      env,
+      'social-boost/services',
+      { params: { driver: 'global' } }
+    );
+
+    const servicesData = providerEnvelope(servicesResponse.data);
+    const services = Array.isArray(servicesData)
+      ? servicesData
+      : (servicesData?.services || servicesData?.data || []);
+
+    message = `Connected. Account verified; ${services.length} global services returned.`;
+  } else {
+    const primeResponse = await nexarCall(
+      env,
+      'virtual-numbers/countries',
+      { params: { driver: 'prime' } }
+    );
+
+    const alternateResponse = await nexarCall(
+      env,
+      'virtual-numbers/countries',
+      { params: { driver: 'alternate' } }
+    );
+
+    const countCountries = value => {
+      const data = providerEnvelope(value);
+      if (Array.isArray(data)) return data.length;
+      if (Array.isArray(data?.countries)) return data.countries.length;
+      if (Array.isArray(data?.data)) return data.data.length;
+      return 0;
+    };
+
+    const primeCount = countCountries(primeResponse.data);
+    const alternateCount = countCountries(alternateResponse.data);
+
+    message = `Connected. Account verified; Prime returned ${primeCount} countries and Alternate returned ${alternateCount} countries.`;
   }
+
+  await env.DB.prepare(`
+    INSERT INTO provider_configs
+    (id, provider, product, base_url, api_key_enc, extra_enc,
+     enabled, verification_status, last_test_at, last_test_message, updated_at)
+    VALUES (?, 'nexar', ?, ?, '', '', 1, 'connected', ?, ?, ?)
+    ON CONFLICT(provider, product) DO UPDATE SET
+      enabled=1,
+      verification_status='connected',
+      last_test_at=excluded.last_test_at,
+      last_test_message=excluded.last_test_message,
+      updated_at=excluded.updated_at
+  `).bind(
+    crypto.randomUUID(),
+    product,
+    baseUrl,
+    now,
+    message,
+    now
+  ).run();
+
+  await env.DB.prepare(
+    'INSERT INTO audit_logs (admin_id, action, detail, created_at) VALUES (?, ?, ?, ?)'
+  ).bind(
+    admin.id,
+    'provider.connection_test',
+    JSON.stringify({
+      provider: 'nexar',
+      product,
+      result: 'connected',
+      account: accountData?.account?.business_name || null
+    }),
+    now
+  ).run();
+
+  return respond({
+    ok: true,
+    provider: 'nexar',
+    product,
+    status: 'connected',
+    message
+  }, 200, request);
+
+} catch (error) {
+  const message = providerErrorMessage(error);
+
+  try {
+    await env.DB.prepare(`
+      INSERT INTO provider_configs
+      (id, provider, product, base_url, api_key_enc, extra_enc,
+       enabled, verification_status, last_test_at, last_test_message, updated_at)
+      VALUES (?, 'nexar', ?, ?, '', '', 0, 'error', ?, ?, ?)
+      ON CONFLICT(provider, product) DO UPDATE SET
+        enabled=0,
+        verification_status='error',
+        last_test_at=excluded.last_test_at,
+        last_test_message=excluded.last_test_message,
+        updated_at=excluded.updated_at
+    `).bind(
+      crypto.randomUUID(),
+      product,
+      baseUrl,
+      now,
+      message,
+      now
+    ).run();
+  } catch {}
+
+  return jsonError(
+    message,
+    error?.status === 429 ? 429 : 502,
+    request
+  );
+}
+
+    }
   return null;
 }
 let communicationSchemaReady = null;
