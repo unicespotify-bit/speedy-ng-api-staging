@@ -2040,19 +2040,23 @@ clearTimeout(timer);
   }
 
 function providerErrorMessage(error) {
-  if (error?.name === 'AbortError') {
-    return 'Provider request timed out. No purchase was attempted.';
-  }
+if (error?.name === 'AbortError') {
+return 'Provider request timed out. No purchase was attempted.';
+}
 
-  if (error?.status === 429) {
-    return `Provider rate limit reached${error.retryAfter ? `. Retry after ${error.retryAfter} seconds` : ''}. Please wait before trying again.`;
-  }
+if (error?.providerOrigin === 'youngpg_application') {
+return "YoungPG rate limit reached${error.retryAfter ? ". Retry after ${error.retryAfter} seconds" : ''}. Please wait before trying again.";
+}
 
-  if (error?.status >= 400 && error?.status < 500 && error?.providerBody) {
-    return `Provider returned HTTP ${error.status}: ${String(error.providerBody).slice(0, 300)}`;
-  }
+if (error?.providerOrigin === 'unconfirmed_upstream_or_edge') {
+return 'An upstream HTTP 429 was received, but it was not identified as a YoungPG application rate limit. Response diagnostics have been recorded for investigation.';
+}
 
-  return error?.message || 'Provider request failed.';
+if (error?.status >= 400 && error?.status < 500 && error?.providerBody) {
+return "Provider returned HTTP ${error.status}: ${String(error.providerBody).slice(0, 300)}";
+}
+
+return error?.message || 'Provider request failed.';
 }
 
 async function youngpgVirtualCall(env, action, params = {}) {
