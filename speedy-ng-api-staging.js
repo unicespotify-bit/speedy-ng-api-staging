@@ -3679,7 +3679,11 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
     return jsonError('Endpoint not found.', 404, request);
   } catch (error) {
     console.error('YoungPG catalogue request failed:', error?.message || error);
-    return jsonError(providerErrorMessage(error), error?.status === 429 ? 429 : 502, request);
+    return jsonError(
+  providerErrorMessage(error),
+  [429, 503].includes(error?.status) ? error.status : 502,
+  request
+);
   }
 }
 
@@ -3902,7 +3906,7 @@ const countryName = url.searchParams.get('country_name') || country;
 
       return jsonError(
         diagnostic,
-        error?.status === 429 ? 429 : 502,
+        [429, 503].includes(error?.status) ? error.status : 502,
         request
       );
     }
