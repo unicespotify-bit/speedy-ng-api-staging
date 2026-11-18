@@ -4245,98 +4245,134 @@ async function nexarSocialBoostServicesCached(env, driver) {
   return pending;
 }
 async function nexarVirtualNumberRoutes(request, env, url, path, method) {
-  const base = '/api/customer/official-numbers';
+const base = '/api/customer/official-numbers';
 
 const isOfficialNumbersRoute =
-  (method === 'GET' &&
-    (path === `${base}/countries` || path === `${base}/services`)) ||
-  (method === 'POST' && path === `${base}/price`);
+(method === 'GET' &&
+(path === "${base}/countries" || path === "${base}/services")) ||
+(method === 'POST' && path === "${base}/price");
 
 if (!isOfficialNumbersRoute) return null;
 
 const customer = await getCustomer(request, env);
 if (!customer) {
-  return jsonError('A verified customer login is required.', 401, request);
+return jsonError('A verified customer login is required.', 401, request);
 }
 
-  if (method === 'GET' && path === `${base}/countries`) {
-    try {
-      const result = await nexarCall(
-        env,
-        'virtual-numbers/countries'
-      );
+const requestedDriver = method === 'POST'
+? (await readBody(request))
+: null;
 
-      const data = providerEnvelope(result.data);
+const driverValue = method === 'POST'
+? requestedDriver?.driver
+: url.searchParams.get('driver');
 
-      return respond({
-        ok: true,
-        countries: Array.isArray(data)
-          ? data
-          : (data?.countries || data?.data || [])
-      }, 200, request);
+const driver = driverValue === 'alternate' ? 'alternate' : 'prime';
 
-    } catch (error) {
-      return jsonError(
-        providerErrorMessage(error),
-        error?.status === 429 ? 429 : 502,
-        request
-      );
+if (method === 'GET' && path === "${base}/countries") {
+try {
+const result = await nexarCall(
+env,
+'virtual-numbers/countries',
+{ params: { driver } }
+);
+
+  const data = providerEnvelope(result.data);
+
+  return respond({
+    ok: true,
+    driver,
+    countries: Array.isArray(data)
+      ? data
+      : (data?.countries || data?.data || [])
+  }, 200, request);
+
+} catch (error) {
+  return jsonError(
+    providerErrorMessage(error),
+    error?.status === 429 ? 429 : 502,
+    request
+  );
+}
+
+}
+
+if (method === 'GET' && path === "${base}/services") {
+try {
+const result = await nexarCall(
+env,
+'virtual-numbers/services',
+{ params: { driver } }
+);
+
+  const data = providerEnvelope(result.data);
+
+  return respond({
+    ok: true,
+    driver,
+    services: Array.isArray(data)
+      ? data
+      : (data?.services || data?.data || [])
+  }, 200, request);
+
+} catch (error) {
+  return jsonError(
+    providerErrorMessage(error),
+    error?.status === 429 ? 429 : 502,
+    request
+  );
+}
+
+}
+
+if (method === 'POST' && path === "${base}/price") {
+const body = requestedDriver;
+
+const country = body?.country;
+const service = body?.service;
+
+if (
+  country === undefined ||
+  service === undefined ||
+  !/^[a-zA-Z0-9_-]{1,80}$/.test(String(country)) ||
+  !/^[a-zA-Z0-9_-]{1,80}$/.test(String(service))
+) {
+  return jsonError(
+    'Choose a valid country and service.',
+    400,
+    request
+  );
+}
+
+try {
+  const result = await nexarCall(
+    env,
+    'virtual-numbers/price',
+    {
+      method: 'POST',
+      params: { driver },
+      body: { country, service }
     }
-  }
+  );
 
-  if (method === 'GET' && path === `${base}/services`) {
-    try {
-      const result = await nexarCall(
-        env,
-        'virtual-numbers/services'
-      );
+  return respond({
+    ok: true,
+    driver,
+    price: providerEnvelope(result.data)
+  }, 200, request);
 
-      const data = providerEnvelope(result.data);
+} catch (error) {
+  return jsonError(
+    providerErrorMessage(error),
+    error?.status === 429 ? 429 : 502,
+    request
+  );
+}
 
-      return respond({
-        ok: true,
-        services: Array.isArray(data)
-          ? data
-          : (data?.services || data?.data || [])
-      }, 200, request);
+}
 
-    } catch (error) {
-      return jsonError(
-        providerErrorMessage(error),
-        error?.status === 429 ? 429 : 502,
-        request
-      );
-    }
-  }
-
-  if (method === 'POST' && path === `${base}/price`) {
-    const body = await readBody(request);
-
-    const country = body?.country;
-    const service = body?.service;
-
-    if (
-      country === undefined ||
-      service === undefined ||
-      !/^[a-zA-Z0-9_-]{1,80}$/.test(String(country)) ||
-      !/^[a-zA-Z0-9_-]{1,80}$/.test(String(service))
-    ) {
-      return jsonError(
-        'Choose a valid country and service.',
-        400,
-        request
-      );
-    }
-
-    try {
-      const result = await nexarCall(
-        env,
-        'virtual-numbers/price',
-        {
-          method: 'POST',
-          body: { country, service }
-        }
-      );
+return null;
+}
 
       return respond({
         ok: true,
