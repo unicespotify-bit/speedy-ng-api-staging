@@ -1895,130 +1895,149 @@ if (!env.FLW_CLIENT_ID || !env.FLW_CLIENT_SECRET) {
 // YoungPG read-only provider adapters. Purchase mutations are intentionally
 // excluded from this phase until each live account's catalogue is verified.
 async function providerFetch(url, init = {}) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 12000);
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort(), 12000);
 
-  let requestInfo = {
-    provider: 'YoungPG',
-    action: null,
-    country: null,
-    service: null
-  };
+const requestInfo = {
+provider: 'YoungPG',
+action: null,
+country: null,
+service: null
+};
 
-  try {
-    const safeUrl = new URL(url);
-    requestInfo.action = safeUrl.searchParams.get('action');
-    requestInfo.country = safeUrl.searchParams.get('country');
-    requestInfo.service = safeUrl.searchParams.get('service');
+try {
+const safeUrl = new URL(url);
+requestInfo.action = safeUrl.searchParams.get('action');
+requestInfo.country = safeUrl.searchParams.get('country');
+requestInfo.service = safeUrl.searchParams.get('service');
 
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal
-    });
+const response = await fetch(url, {
+  ...init,
+  signal: controller.signal
+});
 
-    const text = await response.text();
+const responseText = await response.text();
 
-    let data = text;
-    try {
-      data = JSON.parse(text);
-    } catch {}
+let data = responseText;
+try {
+  data = JSON.parse(responseText);
+} catch {}
 
-    const diagnostic = {
-      timestamp: new Date().toISOString(),
-      ...requestInfo,
-      httpStatus: response.status,
-      retryAfter: response.headers.get('Retry-After'),
-      rawResponse: typeof data === 'string'
-        ? data.slice(0, 1000)
-        : JSON.stringify(data).slice(0, 1000)
-    };
+const rawResponse = typeof data === 'string'
+  ? data.slice(0, 2000)
+  : JSON.stringify(data).slice(0, 2000);
 
-    
-            const providerCodes = [
-      'BAD_KEY',
-      'BAD_ACTION',
-      'BAD_SERVICE',
-      'BAD_COUNTRY',
-      'BAD_PERIOD',
-      'NO_BALANCE',
-      'NO_NUMBERS',
-      'MAX_PRICE_EXCEEDED',
-      'TOO_MANY_REQUESTS',
-      'RENTAL_ERROR_TRY_AGAIN'
-    ];
+const diagnostic = {
+  timestamp: new Date().toISOString(),
+  ...requestInfo,
+  httpStatus: response.status,
+  retryAfter: response.headers.get('Retry-After'),
+  responseHeaders: {
+    cfRay: response.headers.get('CF-Ray'),
+    server: response.headers.get('Server'),
+    contentType: response.headers.get('Content-Type'),
+    cfCacheStatus: response.headers.get('CF-Cache-Status'),
+    via: response.headers.get('Via'),
+    requestId: response.headers.get('X-Request-ID')
+  },
+  rawResponse
+};
 
-    const responseText = typeof data === 'string'
-      ? data.trim()
-      : JSON.stringify(data);
+const providerCodes = [
+  'BAD_KEY',
+  'BAD_ACTION',
+  'BAD_SERVICE',
+  'BAD_COUNTRY',
+  'BAD_PERIOD',
+  'NO_BALANCE',
+  'NO_NUMBERS',
+  'MAX_PRICE_EXCEEDED',
+  'TOO_MANY_REQUESTS',
+  'RENTAL_ERROR_TRY_AGAIN'
+];
 
-    const matchedCode = providerCodes.find(code =>
-      new RegExp(`(^|[^A-Z0-9_])${code}([^A-Z0-9_]|$)`, 'i')
-        .test(responseText)
-    );
+const normalizedResponse = typeof data === 'string'
+  ? data.trim()
+  : JSON.stringify(data);
 
-    const catalogueError =
-      data &&
-      typeof data === 'object' &&
-      String(data.status || '').toLowerCase() === 'error';
+const matchedCode = providerCodes.find(code =>
+  new RegExp(`(^|[^A-Z0-9_])${code}([^A-Z0-9_]|$)`, 'i')
+    .test(normalizedResponse)
+);
 
-    const providerMessage =
-      data && typeof data === 'object'
-        ? String(data.message || data.error || data.detail || '')
-        : '';
+const catalogueError =
+  data &&
+  typeof data === 'object' &&
+  String(data.status || '').toLowerCase() === 'error';
 
-    if (!response.ok || matchedCode || catalogueError) {
-      const rateLimited =
-        response.status === 429 ||
-        matchedCode === 'TOO_MANY_REQUESTS';
+const providerMessage =
+  data && typeof data === 'object'
+    ? String(data.message || data.error || data.detail || '')
+    : '';
 
-      const error = new Error(
-        `YoungPG returned ${
+if (!response.ok || matchedCode || catalogueError) {
+  const confirmedYoungPgLimit =
+    matchedCode === 'TOO_MANY_REQUESTS';
+
+  const unconfirmed429 =
+    response.status === 429 && !confirmedYoungPgLimit;
+
+  const error = new Error(
+    unconfirmed429
+      ? 'An upstream HTTP 429 was received, but its source is unconfirmed.'
+      : `YoungPG returned ${
           matchedCode ||
           providerMessage ||
           `HTTP ${response.status}`
         }`
-      );
+  );
 
-      error.status = rateLimited
-        ? 429
-        : (response.ok ? 502 : response.status);
+  error.status = confirmedYoungPgLimit
+    ? 429
+    : (unconfirmed429 || response.ok ? 502 : response.status);
 
-      error.providerCode = matchedCode || null;
-      error.retryAfter = diagnostic.retryAfter;
-      error.providerBody = diagnostic.rawResponse;
-      error.providerDiagnostic = diagnostic;
+  error.upstreamStatus = response.status;
+  error.providerOrigin = confirmedYoungPgLimit
+    ? 'youngpg_application'
+    : (unconfirmed429 ? 'unconfirmed_upstream_or_edge' : 'youngpg_response');
 
-      console.error('[SPEEDY_YOUNGPG_REQUEST_FAILED]', {
-        ...diagnostic,
-        providerCode: matchedCode || null,
-        catalogueError
-      });
+  error.providerCode = matchedCode || null;
+  error.retryAfter = diagnostic.retryAfter;
+  error.providerBody = diagnostic.rawResponse;
+  error.providerDiagnostic = diagnostic;
 
-      throw error;
-    }
+  console.error('[SPEEDY_YOUNGPG_REQUEST_FAILED]', {
+    ...diagnostic,
+    providerCode: matchedCode || null,
+    providerOrigin: error.providerOrigin,
+    catalogueError
+  });
 
-    return {
-      data,
-      status: response.status,
-      retryAfter: response.headers.get('Retry-After')
-    };
-    
-  } catch (error) {
-    if (!error.providerDiagnostic) {
-      console.error('[SPEEDY_YOUNGPG_CONNECTION_ERROR]', {
-        timestamp: new Date().toISOString(),
-        ...requestInfo,
-        errorName: error?.name || 'Error',
-        errorMessage: error?.message || String(error)
-      });
-    }
-
-    throw error;
-
-  } finally {
-    clearTimeout(timer);
-  }
+  throw error;
 }
+
+return {
+  data,
+  status: response.status,
+  retryAfter: response.headers.get('Retry-After')
+};
+
+} catch (error) {
+if (!error.providerDiagnostic) {
+console.error('[SPEEDY_YOUNGPG_CONNECTION_ERROR]', {
+timestamp: new Date().toISOString(),
+...requestInfo,
+errorName: error?.name || 'Error',
+errorMessage: error?.message || String(error)
+});
+}
+
+throw error;
+
+} finally {
+clearTimeout(timer);
+}
+  }
 
 function providerErrorMessage(error) {
   if (error?.name === 'AbortError') {
