@@ -3444,12 +3444,12 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
       return respond({ ok: true, listing: providerEnvelope(result.data) }, 200, request);
     }
     if (path === visualPrefix + 'countries') {
-const result = await youngpgVirtualCachedCall(
-  env,
-  'getServicesList',
-  {},
-  300000
-);
+      const result = await youngpgVirtualCachedCall(
+        env,
+        'getCountries',
+        {},
+        300000
+      );
   let countries = result.data;
 
   if (typeof countries === 'string') {
