@@ -5022,6 +5022,58 @@ if (nexarResponse) return nexarResponse;
   if (!admin) return jsonError("Administrator login required.", 401, request);
   await ensureCommunicationSchema(env);
 // Admin announcement management
+  // Nexar webhook notifications — admin only.
+if (method === "GET" && path === "/api/admin/nexar/notifications") {
+  await ensureNexarWebhookSchema(env);
+
+  const result = await env.DB.prepare(`
+    SELECT
+      event_id,
+      event_type,
+      order_reference,
+      customer_reference,
+      processing_status,
+      payload_json,
+      received_at,
+      read_at
+    FROM nexar_webhook_events
+    ORDER BY received_at DESC
+    LIMIT 200
+  `).all();
+
+  return respond({
+    ok: true,
+    notifications: result.results || []
+  }, 200, request);
+}
+
+const nexarReadMatch = path.match(
+  /^\/api\/admin\/nexar\/notifications\/([^/]+)\/read$/
+);
+
+if (method === "PATCH" && nexarReadMatch) {
+  await ensureNexarWebhookSchema(env);
+
+  const eventId = decodeURIComponent(nexarReadMatch[1]);
+
+  const result = await env.DB.prepare(`
+    UPDATE nexar_webhook_events
+    SET read_at = ?
+    WHERE event_id = ?
+  `).bind(
+    new Date().toISOString(),
+    eventId
+  ).run();
+
+  if (!Number(result.meta?.changes || 0)) {
+    return jsonError("Nexar notification not found.", 404, request);
+  }
+
+  return respond({
+    ok: true,
+    message: "Nexar notification marked as read."
+  }, 200, request);
+}
   if (method === "GET" && path === "/api/admin/announcements") {
     const result = await env.DB.prepare(
       "SELECT id, title, message, type, is_active, created_at, updated_at, created_by FROM admin_announcements ORDER BY created_at DESC LIMIT 200"
