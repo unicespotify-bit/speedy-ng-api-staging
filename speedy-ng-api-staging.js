@@ -4456,6 +4456,139 @@ async function nexarVirtualNumberRoutes(request, env, url, path, method) {
 
   return null;
   }
+async function nexarAdminVirtualNumberRoutes(request, env, url, path, method) {
+  const base = '/api/admin/catalogue/nexa-visual-numbers';
+
+  const countriesPath = `${base}/countries`;
+  const servicesPath = `${base}/services`;
+  const pricePath = `${base}/price`;
+
+  const isRoute =
+    (method === 'GET' &&
+      (path === countriesPath || path === servicesPath)) ||
+    (method === 'POST' && path === pricePath);
+
+  if (!isRoute) return null;
+
+  const admin = await getAdmin(request, env);
+
+  if (!admin) {
+    return jsonError('Admin login is required.', 401, request);
+  }
+
+  let body = null;
+
+  if (method === 'POST') {
+    try {
+      body = await readBody(request);
+    } catch {
+      return jsonError('Invalid request body.', 400, request);
+    }
+  }
+
+  const driverValue = method === 'POST'
+    ? body?.driver
+    : url.searchParams.get('driver');
+
+  const driver = driverValue || 'prime';
+
+  if (!['prime', 'alternate'].includes(driver)) {
+    return jsonError('Choose Prime or Alternate.', 400, request);
+  }
+
+  if (method === 'POST' && path === pricePath) {
+    const country = body?.country;
+    const service = body?.service;
+
+    if (
+      !/^[a-zA-Z0-9_-]{1,80}$/.test(String(country || '')) ||
+      !/^[a-zA-Z0-9_-]{1,80}$/.test(String(service || ''))
+    ) {
+      return jsonError('Choose a valid country and service.', 400, request);
+    }
+
+    try {
+      const result = await nexarCall(
+        env,
+        'virtual-numbers/price',
+        {
+          method: 'POST',
+          params: { driver },
+          body: { country, service }
+        }
+      );
+
+      return respond({
+        ok: true,
+        driver,
+        price: providerEnvelope(result.data)
+      }, 200, request);
+
+    } catch (error) {
+      return jsonError(
+        providerErrorMessage(error),
+        error?.status === 429 ? 429 : 502,
+        request
+      );
+    }
+  }
+
+  const catalogueType = path === countriesPath ? 'countries' : 'services';
+  const cacheKey = `${catalogueType}:${driver}`;
+  const cached = NEXAR_VIRTUAL_NUMBER_CATALOGUE_CACHE.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return respond({
+      ok: true,
+      driver,
+      [catalogueType]: cached.data
+    }, 200, request);
+  }
+
+  const endpoint = catalogueType === 'countries'
+    ? 'virtual-numbers/countries'
+    : 'virtual-numbers/services';
+
+  try {
+    const result = await nexarCall(
+      env,
+      endpoint,
+      { params: { driver } }
+    );
+
+    const data = providerEnvelope(result.data);
+
+    const items = Array.isArray(data)
+      ? data
+      : (
+          data?.[catalogueType] ||
+          data?.data ||
+          []
+        );
+
+    if (!Array.isArray(items)) {
+      throw new Error('Nexa returned an invalid catalogue format.');
+    }
+
+    NEXAR_VIRTUAL_NUMBER_CATALOGUE_CACHE.set(cacheKey, {
+      data: items,
+      expiresAt: Date.now() + 300000
+    });
+
+    return respond({
+      ok: true,
+      driver,
+      [catalogueType]: items
+    }, 200, request);
+
+  } catch (error) {
+    return jsonError(
+      providerErrorMessage(error),
+      error?.status === 429 ? 429 : 502,
+      request
+    );
+  }
+          }
 function nexarMoneyFromService(service) {
   // Fail closed unless Nexar explicitly identifies a per-unit amount; do not guess whether a rate is per 1,000.
   const value = service?.unit_price ?? service?.price_per_unit;
