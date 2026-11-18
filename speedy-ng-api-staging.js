@@ -3420,7 +3420,12 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
     if (path === logsPrefix + 'listing') {
       const slug = String(url.searchParams.get('slug') || '').trim();
       if (!/^[a-zA-Z0-9_-]{3,120}$/.test(slug)) return jsonError('A valid listing slug is required.', 400, request);
-      const result = await youngpgMediaCall(env, `listings/${encodeURIComponent(slug)}`);
+      const result = await youngpgMediaCachedCall(
+  env,
+  `listings/${encodeURIComponent(slug)}`,
+  {},
+  60000
+);
       return respond({ ok: true, listing: providerEnvelope(result.data) }, 200, request);
     }
     if (path === visualPrefix + 'countries') {
@@ -3492,7 +3497,12 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
       return respond({ ok: true, balance: result.data }, 200, request);
     }
     if (path === logsPrefix + 'categories') {
-      const result = await youngpgMediaCall(env, 'categories');
+      const result = await youngpgMediaCachedCall(
+  env,
+  'categories',
+  {},
+  300000
+);
       return respond({ ok: true, categories: providerEnvelope(result.data) }, 200, request);
     }
     if (path === logsPrefix + 'listings') {
@@ -3505,7 +3515,12 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
         per_page: Math.min(100, Math.max(1, Number(url.searchParams.get('per_page') || 50))),
         page: Math.max(1, Number(url.searchParams.get('page') || 1))
       };
-      const result = await youngpgMediaCall(env, 'listings', params);
+      const result = await youngpgMediaCachedCall(
+  env,
+  'listings',
+  params,
+  60000
+);
       const rawListings = providerEnvelope(result.data);
       const settings = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='usd_ngn_rate'").first();
       const rate = Number(settings?.setting_value || 1500);
@@ -3727,7 +3742,12 @@ const countryName = url.searchParams.get('country_name') || country;
           page: Math.max(1, Number(url.searchParams.get('page') || 1))
         };
 
-        const result = await youngpgMediaCall(env, 'listings', params);
+        const result = await youngpgMediaCachedCall(
+  env,
+  'listings',
+  params,
+  60000
+);
 
         return respond({
           ok: true,
