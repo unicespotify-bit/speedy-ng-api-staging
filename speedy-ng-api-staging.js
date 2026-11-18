@@ -2068,113 +2068,210 @@ async function youngpgVirtualCall(env, action, params = {}) {
   for (const [key, value] of Object.entries(params)) if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   return providerFetch(url.toString());
 }
-// Cache successful read-only YoungPG catalogue requests.
-// Do not impose an application-level cooldown.
-// Shared D1 cache for successful, read-only Visual Numbers catalogue requests.
-async function youngpgVirtualCachedCall(env, action, params = {}, ttlMs = 60000) {
-  await ensureSpeedySocialLogsCache(env);
+// Shared provider catalogue cache and request lock.
+// Only one Worker request refreshes the same catalogue key at a time.
+// This helper is reusable when additional providers are integrated later.
 
-  const normalizedParams = Object.fromEntries(
-    Object.entries(params)
-      .filter(([, value]) => value !== undefined && value !== null && value !== '')
-      .sort(([a], [b]) => a.localeCompare(b))
-  );
-
-  const cacheKey = JSON.stringify([
-    'visual_numbers',
-    action,
-    normalizedParams
-  ]);
-
-  const now = Date.now();
-
-  const cached = await env.DB.prepare(
-    "SELECT response_json FROM speedy_provider_catalogue_cache WHERE cache_key = ? AND expires_at > ?"
-  ).bind(cacheKey, now).first();
-
-  if (cached?.response_json) {
-    try {
-      return JSON.parse(cached.response_json);
-    } catch {
-      await env.DB.prepare(
-        "DELETE FROM speedy_provider_catalogue_cache WHERE cache_key = ?"
-      ).bind(cacheKey).run();
-    }
-  }
-
-  // Cache only successful provider responses.
-  const result = await youngpgVirtualCall(env, action, normalizedParams);
-
-  await env.DB.prepare(
-    "INSERT INTO speedy_provider_catalogue_cache (cache_key, response_json, expires_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET response_json = excluded.response_json, expires_at = excluded.expires_at, updated_at = excluded.updated_at"
-  ).bind(
-    cacheKey,
-    JSON.stringify(result),
-    Date.now() + ttlMs,
-    new Date().toISOString()
-  ).run();
-
-  return result;
-}
-// SPEEDY.NG shared Social Logs catalogue cache.
-// D1 storage makes successful catalogue responses reusable across Worker instances.
 let speedySocialLogsCacheReady = null;
 
 async function ensureSpeedySocialLogsCache(env) {
 if (!speedySocialLogsCacheReady) {
-speedySocialLogsCacheReady = env.DB.prepare("CREATE TABLE IF NOT EXISTS speedy_provider_catalogue_cache ( cache_key TEXT PRIMARY KEY, response_json TEXT NOT NULL, expires_at INTEGER NOT NULL, updated_at TEXT NOT NULL )").run().catch(error => {
-speedySocialLogsCacheReady = null;
-throw error;
+speedySocialLogsCacheReady = (async () => {
+await env.DB.prepare("CREATE TABLE IF NOT EXISTS speedy_provider_catalogue_cache ( cache_key TEXT PRIMARY KEY, response_json TEXT NOT NULL, expires_at INTEGER NOT NULL, updated_at TEXT NOT NULL )").run();
+
+  await env.DB.prepare(`
+    CREATE TABLE IF NOT EXISTS speedy_provider_catalogue_locks (
+      cache_key TEXT PRIMARY KEY,
+      owner_token TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    )
+  `).run();
+})().catch(error => {
+  speedySocialLogsCacheReady = null;
+  throw error;
 });
+
 }
 
 return speedySocialLogsCacheReady;
 }
 
+async function providerCatalogueCachedCall(
+env,
+cacheKey,
+ttlMs,
+fetchFunction
+) {
+await ensureSpeedySocialLogsCache(env);
+
+const readCache = async () => {
+const cached = await env.DB.prepare("SELECT response_json FROM speedy_provider_catalogue_cache WHERE cache_key = ? AND expires_at > ?").bind(cacheKey, Date.now()).first();
+
+if (!cached?.response_json) return null;
+
+try {
+  return JSON.parse(cached.response_json);
+} catch {
+  await env.DB.prepare(`
+    DELETE FROM speedy_provider_catalogue_cache
+    WHERE cache_key = ?
+  `).bind(cacheKey).run();
+
+  return null;
+}
+
+};
+
+const existingCache = await readCache();
+
+if (existingCache !== null) {
+return existingCache;
+}
+
+const ownerToken = crypto.randomUUID();
+const lockLifetimeMs = 15000;
+const waitDeadline = Date.now() + 16000;
+
+let ownsLock = false;
+
+while (!ownsLock) {
+const now = Date.now();
+
+const lockResult = await env.DB.prepare(`
+  INSERT INTO speedy_provider_catalogue_locks (
+    cache_key,
+    owner_token,
+    expires_at
+  )
+  VALUES (?, ?, ?)
+  ON CONFLICT(cache_key) DO UPDATE SET
+    owner_token = excluded.owner_token,
+    expires_at = excluded.expires_at
+  WHERE speedy_provider_catalogue_locks.expires_at <= ?
+`).bind(
+  cacheKey,
+  ownerToken,
+  now + lockLifetimeMs,
+  now
+).run();
+
+ownsLock = Number(lockResult.meta?.changes || 0) > 0;
+
+if (ownsLock) break;
+
+const refreshedCache = await readCache();
+
+if (refreshedCache !== null) {
+  return refreshedCache;
+}
+
+if (Date.now() >= waitDeadline) {
+  const error = new Error(
+    'Catalogue refresh is already running. Please retry shortly.'
+  );
+  error.status = 503;
+  throw error;
+}
+
+await new Promise(resolve => setTimeout(resolve, 250));
+
+}
+
+try {
+// Check again because another request may have filled the cache
+// immediately before this request acquired the lock.
+const refreshedCache = await readCache();
+
+if (refreshedCache !== null) {
+  return refreshedCache;
+}
+
+// Only successful provider responses are cached.
+const result = await fetchFunction();
+
+await env.DB.prepare(`
+  INSERT INTO speedy_provider_catalogue_cache (
+    cache_key,
+    response_json,
+    expires_at,
+    updated_at
+  )
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(cache_key) DO UPDATE SET
+    response_json = excluded.response_json,
+    expires_at = excluded.expires_at,
+    updated_at = excluded.updated_at
+`).bind(
+  cacheKey,
+  JSON.stringify(result),
+  Date.now() + ttlMs,
+  new Date().toISOString()
+).run();
+
+return result;
+
+} finally {
+// Only the owner of this lock is allowed to release it.
+await env.DB.prepare("DELETE FROM speedy_provider_catalogue_locks WHERE cache_key = ? AND owner_token = ?").bind(cacheKey, ownerToken).run();
+}
+}
+
+// Visual Numbers catalogue cache.
+async function youngpgVirtualCachedCall(
+env,
+action,
+params = {},
+ttlMs = 60000
+) {
+const normalizedParams = Object.fromEntries(
+Object.entries(params)
+.filter(([, value]) =>
+value !== undefined && value !== null && value !== ''
+)
+.sort(([a], [b]) => a.localeCompare(b))
+);
+
+const cacheKey = JSON.stringify([
+'visual_numbers',
+action,
+normalizedParams
+]);
+
+return providerCatalogueCachedCall(
+env,
+cacheKey,
+ttlMs,
+() => youngpgVirtualCall(env, action, normalizedParams)
+);
+}
+
+// Social Logs catalogue cache.
 async function youngpgMediaCachedCall(
 env,
 endpoint,
 params = {},
 ttlMs = 60000
 ) {
-await ensureSpeedySocialLogsCache(env);
-
 const normalizedParams = Object.fromEntries(
 Object.entries(params)
-.filter(([, value]) => value !== undefined && value !== null && value !== '')
+.filter(([, value]) =>
+value !== undefined && value !== null && value !== ''
+)
 .sort(([a], [b]) => a.localeCompare(b))
 );
 
 const cacheKey = JSON.stringify([
+'social_logs',
 endpoint,
 normalizedParams
 ]);
 
-const now = Date.now();
-
-const cached = await env.DB.prepare("SELECT response_json FROM speedy_provider_catalogue_cache WHERE cache_key = ? AND expires_at > ?").bind(cacheKey, now).first();
-
-if (cached?.response_json) {
-try {
-return JSON.parse(cached.response_json);
-} catch {
-await env.DB.prepare("DELETE FROM speedy_provider_catalogue_cache WHERE cache_key = ?").bind(cacheKey).run();
-}
-}
-
-// Only successful provider responses are cached.
-const result = await youngpgMediaCall(env, endpoint, normalizedParams);
-
-const responseJson = JSON.stringify(result);
-
-await env.DB.prepare("INSERT INTO speedy_provider_catalogue_cache (cache_key, response_json, expires_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET response_json = excluded.response_json, expires_at = excluded.expires_at, updated_at = excluded.updated_at").bind(
+return providerCatalogueCachedCall(
+env,
 cacheKey,
-responseJson,
-now + ttlMs,
-new Date().toISOString()
-).run();
-
-return result;
+ttlMs,
+() => youngpgMediaCall(env, endpoint, normalizedParams)
+);
 }       
 async function youngpgMediaCall(env, endpoint, params = {}) {
   if (!env.YOUNGPG_MEDIA_API_KEY) throw new Error('YoungPG Media API key is not configured.');
