@@ -2047,36 +2047,51 @@ async function youngpgVirtualCall(env, action, params = {}) {
 }
 // Cache successful read-only YoungPG catalogue requests.
 // Do not impose an application-level cooldown.
+// Shared D1 cache for successful, read-only Visual Numbers catalogue requests.
 async function youngpgVirtualCachedCall(env, action, params = {}, ttlMs = 60000) {
-  const key = JSON.stringify([action, params]);
+  await ensureSpeedySocialLogsCache(env);
 
-  const cached = YOUNGPG_CATALOGUE_CACHE.get(key);
+  const normalizedParams = Object.fromEntries(
+    Object.entries(params)
+      .filter(([, value]) => value !== undefined && value !== null && value !== '')
+      .sort(([a], [b]) => a.localeCompare(b))
+  );
 
-  if (cached?.value && cached.expiresAt > Date.now()) {
-    return cached.value;
+  const cacheKey = JSON.stringify([
+    'visual_numbers',
+    action,
+    normalizedParams
+  ]);
+
+  const now = Date.now();
+
+  const cached = await env.DB.prepare(
+    "SELECT response_json FROM speedy_provider_catalogue_cache WHERE cache_key = ? AND expires_at > ?"
+  ).bind(cacheKey, now).first();
+
+  if (cached?.response_json) {
+    try {
+      return JSON.parse(cached.response_json);
+    } catch {
+      await env.DB.prepare(
+        "DELETE FROM speedy_provider_catalogue_cache WHERE cache_key = ?"
+      ).bind(cacheKey).run();
+    }
   }
 
-  if (cached?.pending) {
-    return cached.pending;
-  }
+  // Cache only successful provider responses.
+  const result = await youngpgVirtualCall(env, action, normalizedParams);
 
-  const pending = youngpgVirtualCall(env, action, params)
-    .then(result => {
-      YOUNGPG_CATALOGUE_CACHE.set(key, {
-        value: result,
-        expiresAt: Date.now() + ttlMs
-      });
+  await env.DB.prepare(
+    "INSERT INTO speedy_provider_catalogue_cache (cache_key, response_json, expires_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET response_json = excluded.response_json, expires_at = excluded.expires_at, updated_at = excluded.updated_at"
+  ).bind(
+    cacheKey,
+    JSON.stringify(result),
+    Date.now() + ttlMs,
+    new Date().toISOString()
+  ).run();
 
-      return result;
-    })
-    .catch(error => {
-      YOUNGPG_CATALOGUE_CACHE.delete(key);
-      throw error;
-    });
-
-  YOUNGPG_CATALOGUE_CACHE.set(key, { pending });
-
-  return pending;
+  return result;
 }
 // SPEEDY.NG shared Social Logs catalogue cache.
 // D1 storage makes successful catalogue responses reusable across Worker instances.
@@ -3429,13 +3444,12 @@ async function youngpgCustomerRoutes(request, env, url, path, method) {
       return respond({ ok: true, listing: providerEnvelope(result.data) }, 200, request);
     }
     if (path === visualPrefix + 'countries') {
-  const result = await youngpgVirtualCachedCall(
-    env,
-    'getCountries',
-    {},
-    300000
-  );
-
+const result = await youngpgVirtualCachedCall(
+  env,
+  'getServicesList',
+  {},
+  300000
+);
   let countries = result.data;
 
   if (typeof countries === 'string') {
