@@ -4245,137 +4245,138 @@ async function nexarSocialBoostServicesCached(env, driver) {
   return pending;
 }
 async function nexarVirtualNumberRoutes(request, env, url, path, method) {
-const base = '/api/customer/official-numbers';
+  const base = '/api/customer/official-numbers';
 
-const isOfficialNumbersRoute =
-(method === 'GET' &&
-(path === "${base}/countries" || path === "${base}/services")) ||
-(method === 'POST' && path === "${base}/price");
+  const countriesPath = `${base}/countries`;
+  const servicesPath = `${base}/services`;
+  const pricePath = `${base}/price`;
 
-if (!isOfficialNumbersRoute) return null;
+  const isOfficialNumbersRoute =
+    (method === 'GET' &&
+      (path === countriesPath || path === servicesPath)) ||
+    (method === 'POST' && path === pricePath);
 
-const customer = await getCustomer(request, env);
-if (!customer) {
-return jsonError('A verified customer login is required.', 401, request);
-}
+  if (!isOfficialNumbersRoute) return null;
 
-const requestedDriver = method === 'POST'
-? (await readBody(request))
-: null;
+  const customer = await getCustomer(request, env);
 
-const driverValue = method === 'POST'
-? requestedDriver?.driver
-: url.searchParams.get('driver');
+  if (!customer) {
+    return jsonError(
+      'A verified customer login is required.',
+      401,
+      request
+    );
+  }
 
-const driver = driverValue === 'alternate' ? 'alternate' : 'prime';
+  let body = null;
 
-if (method === 'GET' && path === "${base}/countries") {
-try {
-const result = await nexarCall(
-env,
-'virtual-numbers/countries',
-{ params: { driver } }
-);
-
-  const data = providerEnvelope(result.data);
-
-  return respond({
-    ok: true,
-    driver,
-    countries: Array.isArray(data)
-      ? data
-      : (data?.countries || data?.data || [])
-  }, 200, request);
-
-} catch (error) {
-  return jsonError(
-    providerErrorMessage(error),
-    error?.status === 429 ? 429 : 502,
-    request
-  );
-}
-
-}
-
-if (method === 'GET' && path === "${base}/services") {
-try {
-const result = await nexarCall(
-env,
-'virtual-numbers/services',
-{ params: { driver } }
-);
-
-  const data = providerEnvelope(result.data);
-
-  return respond({
-    ok: true,
-    driver,
-    services: Array.isArray(data)
-      ? data
-      : (data?.services || data?.data || [])
-  }, 200, request);
-
-} catch (error) {
-  return jsonError(
-    providerErrorMessage(error),
-    error?.status === 429 ? 429 : 502,
-    request
-  );
-}
-
-}
-
-if (method === 'POST' && path === "${base}/price") {
-const body = requestedDriver;
-
-const country = body?.country;
-const service = body?.service;
-
-if (
-  country === undefined ||
-  service === undefined ||
-  !/^[a-zA-Z0-9_-]{1,80}$/.test(String(country)) ||
-  !/^[a-zA-Z0-9_-]{1,80}$/.test(String(service))
-) {
-  return jsonError(
-    'Choose a valid country and service.',
-    400,
-    request
-  );
-}
-
-try {
-  const result = await nexarCall(
-    env,
-    'virtual-numbers/price',
-    {
-      method: 'POST',
-      params: { driver },
-      body: { country, service }
+  if (method === 'POST') {
+    try {
+      body = await readBody(request);
+    } catch {
+      return jsonError('Invalid request body.', 400, request);
     }
-  );
+  }
 
-  return respond({
-    ok: true,
-    driver,
-    price: providerEnvelope(result.data)
-  }, 200, request);
+  const driverValue = method === 'POST'
+    ? body?.driver
+    : url.searchParams.get('driver');
 
-} catch (error) {
-  return jsonError(
-    providerErrorMessage(error),
-    error?.status === 429 ? 429 : 502,
-    request
-  );
-}
+  const driver = driverValue || 'prime';
 
-}
+  if (!['prime', 'alternate'].includes(driver)) {
+    return jsonError(
+      'Choose a valid number provider option.',
+      400,
+      request
+    );
+  }
 
-return null;
-}
+  if (method === 'GET' && path === countriesPath) {
+    try {
+      const result = await nexarCall(
+        env,
+        'virtual-numbers/countries',
+        { params: { driver } }
+      );
+
+      const data = providerEnvelope(result.data);
 
       return respond({
         ok: true,
+        driver,
+        countries: Array.isArray(data)
+          ? data
+          : (data?.countries || data?.data || [])
+      }, 200, request);
+
+    } catch (error) {
+      return jsonError(
+        providerErrorMessage(error),
+        error?.status === 429 ? 429 : 502,
+        request
+      );
+    }
+  }
+
+  if (method === 'GET' && path === servicesPath) {
+    try {
+      const result = await nexarCall(
+        env,
+        'virtual-numbers/services',
+        { params: { driver } }
+      );
+
+      const data = providerEnvelope(result.data);
+
+      return respond({
+        ok: true,
+        driver,
+        services: Array.isArray(data)
+          ? data
+          : (data?.services || data?.data || [])
+      }, 200, request);
+
+    } catch (error) {
+      return jsonError(
+        providerErrorMessage(error),
+        error?.status === 429 ? 429 : 502,
+        request
+      );
+    }
+  }
+
+  if (method === 'POST' && path === pricePath) {
+    const country = body?.country;
+    const service = body?.service;
+
+    if (
+      country === undefined ||
+      service === undefined ||
+      !/^[a-zA-Z0-9_-]{1,80}$/.test(String(country)) ||
+      !/^[a-zA-Z0-9_-]{1,80}$/.test(String(service))
+    ) {
+      return jsonError(
+        'Choose a valid country and service.',
+        400,
+        request
+      );
+    }
+
+    try {
+      const result = await nexarCall(
+        env,
+        'virtual-numbers/price',
+        {
+          method: 'POST',
+          params: { driver },
+          body: { country, service }
+        }
+      );
+
+      return respond({
+        ok: true,
+        driver,
         price: providerEnvelope(result.data)
       }, 200, request);
 
@@ -4389,7 +4390,7 @@ return null;
   }
 
   return null;
-    }
+  }
 function nexarMoneyFromService(service) {
   // Fail closed unless Nexar explicitly identifies a per-unit amount; do not guess whether a rate is per 1,000.
   const value = service?.unit_price ?? service?.price_per_unit;
