@@ -2078,7 +2078,66 @@ async function youngpgVirtualCachedCall(env, action, params = {}, ttlMs = 60000)
 
   return pending;
 }
-       
+// SPEEDY.NG shared Social Logs catalogue cache.
+// D1 storage makes successful catalogue responses reusable across Worker instances.
+let speedySocialLogsCacheReady = null;
+
+async function ensureSpeedySocialLogsCache(env) {
+if (!speedySocialLogsCacheReady) {
+speedySocialLogsCacheReady = env.DB.prepare("CREATE TABLE IF NOT EXISTS speedy_provider_catalogue_cache ( cache_key TEXT PRIMARY KEY, response_json TEXT NOT NULL, expires_at INTEGER NOT NULL, updated_at TEXT NOT NULL )").run().catch(error => {
+speedySocialLogsCacheReady = null;
+throw error;
+});
+}
+
+return speedySocialLogsCacheReady;
+}
+
+async function youngpgMediaCachedCall(
+env,
+endpoint,
+params = {},
+ttlMs = 60000
+) {
+await ensureSpeedySocialLogsCache(env);
+
+const normalizedParams = Object.fromEntries(
+Object.entries(params)
+.filter(([, value]) => value !== undefined && value !== null && value !== '')
+.sort(([a], [b]) => a.localeCompare(b))
+);
+
+const cacheKey = JSON.stringify([
+endpoint,
+normalizedParams
+]);
+
+const now = Date.now();
+
+const cached = await env.DB.prepare("SELECT response_json FROM speedy_provider_catalogue_cache WHERE cache_key = ? AND expires_at > ?").bind(cacheKey, now).first();
+
+if (cached?.response_json) {
+try {
+return JSON.parse(cached.response_json);
+} catch {
+await env.DB.prepare("DELETE FROM speedy_provider_catalogue_cache WHERE cache_key = ?").bind(cacheKey).run();
+}
+}
+
+// Only successful provider responses are cached.
+const result = await youngpgMediaCall(env, endpoint, normalizedParams);
+
+const responseJson = JSON.stringify(result);
+
+await env.DB.prepare("INSERT INTO speedy_provider_catalogue_cache (cache_key, response_json, expires_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(cache_key) DO UPDATE SET response_json = excluded.response_json, expires_at = excluded.expires_at, updated_at = excluded.updated_at").bind(
+cacheKey,
+responseJson,
+now + ttlMs,
+new Date().toISOString()
+).run();
+
+return result;
+}       
 async function youngpgMediaCall(env, endpoint, params = {}) {
   if (!env.YOUNGPG_MEDIA_API_KEY) throw new Error('YoungPG Media API key is not configured.');
   if (!/^ypg_[a-f0-9]{48}$/i.test(env.YOUNGPG_MEDIA_API_KEY)) throw new Error('YoungPG Media API key format is invalid.');
@@ -3641,7 +3700,12 @@ const countryName = url.searchParams.get('country_name') || country;
       }
 
       if (path === logsBase + 'categories') {
-        const result = await youngpgMediaCall(env, 'categories');
+        const result = await youngpgMediaCachedCall(
+  env,
+  'categories',
+  {},
+  300000
+);
 
         return respond({
           ok: true,
