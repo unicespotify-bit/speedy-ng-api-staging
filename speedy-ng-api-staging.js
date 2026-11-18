@@ -1133,6 +1133,70 @@ return respond({
 
   const customer = await getCustomer(request, env);
   if (!customer) return jsonError("Customer login required.", 401, request);
+  // Unified customer order history: all products use the same orders table.
+  if (method === "GET" && path === "/api/customer/orders") {
+    await ensureVisualOrderSchema(env);
+
+    const result = await env.DB.prepare(`
+      SELECT
+        id,
+        category,
+        service,
+        country,
+        quantity,
+        amount_minor,
+        unit_amount_minor,
+        currency,
+        status,
+        expires_at,
+        created_at,
+        updated_at,
+        delivery_json,
+        provider_response_json
+      FROM orders
+      WHERE customer_id = ?
+      ORDER BY created_at DESC
+      LIMIT 100
+    `).bind(customer.id).all();
+
+    const orders = (result.results || []).map(order => {
+      let delivery = null;
+      let providerDetails = {};
+
+      try {
+        delivery = order.delivery_json
+          ? JSON.parse(order.delivery_json)
+          : null;
+      } catch {}
+
+      try {
+        providerDetails = order.provider_response_json
+          ? JSON.parse(order.provider_response_json)
+          : {};
+      } catch {}
+
+      const driver = String(
+        providerDetails?.driver || ""
+      ).toLowerCase();
+
+      delete order.delivery_json;
+      delete order.provider_response_json;
+
+      return {
+        ...customerSafeOrder(order),
+        ...(delivery ? { delivery } : {}),
+        ...(driver === "prime" || driver === "alternate"
+          ? { driver_choice: driver }
+          : {})
+      };
+    });
+
+    return respond({
+      ok: true,
+      orders,
+      count: orders.length
+    }, 200, request);
+  }
   // Return the Flutterwave encryption key only to an authenticated customer.
 if (
   method === "GET" &&
