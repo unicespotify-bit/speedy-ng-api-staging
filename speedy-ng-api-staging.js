@@ -3108,7 +3108,7 @@ const refundEligibleAt = expiryTime + (automatic ? 60 * 60 * 1000 : 0);
 if (Date.now() < refundEligibleAt) return false;
 
 const now = new Date().toISOString();
-const ref = "VN-REFUND-${orderId}";
+const ref = `VN-REFUND-${orderId}`;
 
 const result = await env.DB.batch([
 env.DB.prepare("UPDATE orders SET status='failed', failure_reason=?, updated_at=? WHERE id=? AND customer_id=? AND category='visual_numbers' AND status IN ('processing','review') AND provider_refund_confirmed=1 AND expires_at<=?").bind(
@@ -3150,8 +3150,7 @@ env.DB.prepare(`
 const changed = Number(result[0]?.meta?.changes || 0) === 1;
 
 if (changed) {
-await env.DB.prepare("UPDATE transactions SET status='failed' WHERE reference=? AND status='pending'").bind("VN-${orderId}").run();
-}
+await env.DB.prepare("UPDATE transactions SET status='failed' WHERE reference=? AND status='pending'").bind(`VN-${orderId}`).run();
 
 return changed;
 }
