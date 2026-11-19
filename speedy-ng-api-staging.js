@@ -3089,31 +3089,71 @@ async function confirmVisualProviderRefund(env, orderId, providerStatus, reason)
   return Number(result?.meta?.changes || 0) === 1;
 }
 
-async function refundVisualOrder(env, customerId, orderId, reason) {
-  await ensureCustomerWallets(env, customerId);
+async function refundVisualOrder(env, customerId, orderId, reason, automatic = false) {
+await ensureCustomerWallets(env, customerId);
 
-  const order = await getVisualOrder(env, customerId, orderId);
-  if (!order || !['processing', 'review'].includes(order.status)) return false;
-  if (Number(order.provider_refund_confirmed || 0) !== 1) return false;
-  if (!order.expires_at || Date.now() < Date.parse(order.expires_at)) return false;
-  const now = new Date().toISOString();
-  const ref = `VN-REFUND-${orderId}`;
-  const result = await env.DB.batch([
-    env.DB.prepare(`UPDATE orders SET status='failed', failure_reason=?, updated_at=?
-      WHERE id=? AND customer_id=? AND category='visual_numbers' AND status IN ('processing','review')
-        AND provider_refund_confirmed=1 AND expires_at<=?`)
-      .bind(String(reason).slice(0, 500), now, orderId, customerId, now),
-    env.DB.prepare(`UPDATE wallets SET balance_minor=balance_minor+?, updated_at=?
-      WHERE customer_id=? AND currency='USD' AND changes()=1`)
-      .bind(Number(order.amount_minor), now, customerId),
-    env.DB.prepare(`INSERT OR IGNORE INTO transactions
-      (id, customer_id, type, currency, amount_minor, status, reference, description, created_at)
-      SELECT ?, ?, 'visual_number_refund', 'USD', ?, 'successful', ?, ?, ? WHERE changes()=1`)
-      .bind(crypto.randomUUID(), customerId, Number(order.amount_minor), ref, `Refund for Visual Numbers order ${orderId}`, now)
-  ]);
-  const changed = Number(result[0]?.meta?.changes || 0) === 1;
-  if (changed) await env.DB.prepare("UPDATE transactions SET status='failed' WHERE reference=? AND status='pending'").bind(`VN-${orderId}`).run();
-  return changed;
+const order = await getVisualOrder(env, customerId, orderId);
+
+if (!order || !['processing', 'review'].includes(order.status)) return false;
+if (Number(order.provider_refund_confirmed || 0) !== 1) return false;
+if (!order.expires_at) return false;
+
+const expiryTime = Date.parse(order.expires_at);
+if (!Number.isFinite(expiryTime)) return false;
+
+// Manual refund: available at 00:00.
+// Automatic refund: only after one hour has passed since 00:00.
+const refundEligibleAt = expiryTime + (automatic ? 60 * 60 * 1000 : 0);
+
+if (Date.now() < refundEligibleAt) return false;
+
+const now = new Date().toISOString();
+const ref = "VN-REFUND-${orderId}";
+
+const result = await env.DB.batch([
+env.DB.prepare("UPDATE orders SET status='failed', failure_reason=?, updated_at=? WHERE id=? AND customer_id=? AND category='visual_numbers' AND status IN ('processing','review') AND provider_refund_confirmed=1 AND expires_at<=?").bind(
+String(reason || 'Visual Numbers order refunded.').slice(0, 500),
+now,
+orderId,
+customerId,
+now
+),
+
+env.DB.prepare(`
+  UPDATE wallets
+  SET balance_minor=balance_minor+?, updated_at=?
+  WHERE customer_id=?
+    AND currency='USD'
+    AND changes()=1
+`).bind(
+  Number(order.amount_minor),
+  now,
+  customerId
+),
+
+env.DB.prepare(`
+  INSERT OR IGNORE INTO transactions
+  (id, customer_id, type, currency, amount_minor, status, reference, description, created_at)
+  SELECT ?, ?, 'visual_number_refund', 'USD', ?, 'successful', ?, ?, ?
+  WHERE changes()=1
+`).bind(
+  crypto.randomUUID(),
+  customerId,
+  Number(order.amount_minor),
+  ref,
+  `Refund for Visual Numbers order ${orderId}`,
+  now
+)
+
+]);
+
+const changed = Number(result[0]?.meta?.changes || 0) === 1;
+
+if (changed) {
+await env.DB.prepare("UPDATE transactions SET status='failed' WHERE reference=? AND status='pending'").bind("VN-${orderId}").run();
+}
+
+return changed;
 }
 
 async function attemptVisualProviderCancellation(env, order, initialStatusResponse = null) {
