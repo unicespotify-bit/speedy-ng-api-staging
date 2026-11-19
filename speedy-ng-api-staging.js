@@ -3150,7 +3150,9 @@ env.DB.prepare(`
 const changed = Number(result[0]?.meta?.changes || 0) === 1;
 
 if (changed) {
-await env.DB.prepare("UPDATE transactions SET status='failed' WHERE reference=? AND status='pending'").bind(`VN-${orderId}`).run();
+  await env.DB.prepare("UPDATE transactions SET status='failed' WHERE reference=? AND status='pending'")
+    .bind(`VN-${orderId}`).run();
+}
 
 return changed;
 }
