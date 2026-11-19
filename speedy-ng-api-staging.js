@@ -3424,8 +3424,10 @@ async function attemptNexarVisualProviderCancellation(env, order) {
     };
   }
 
+  let cancelResponse = null;
+
   try {
-    await nexarCall(
+    cancelResponse = await nexarCall(
       env,
       `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/cancel`,
       {
@@ -3440,18 +3442,42 @@ async function attemptNexarVisualProviderCancellation(env, order) {
     );
   }
 
-  // Always check the provider again after cancellation.
-  // A cancellation response alone is not proof of a refund.
+  // Check provider status again after cancellation.
+  // This protects customers if an SMS arrives during cancellation.
   statusData = await checkStatus();
 
   const finalCheck = await confirmIfRefunded(statusData);
 
+  // Never refund an order that has received an SMS.
   if (
     finalCheck.confirmed ||
     finalCheck.completed ||
     finalCheck.reason === 'received_without_code'
   ) {
     return finalCheck;
+  }
+
+  // Inspect Nexa's actual cancellation response.
+  const cancellationData = cancelResponse
+    ? providerEnvelope(cancelResponse.data)
+    : null;
+
+  // Only an explicit refund confirmation is accepted.
+  if (
+    cancellationData?.refunded === true ||
+    cancellationData?.data?.refunded === true
+  ) {
+    await confirmVisualProviderRefund(
+      env,
+      order.id,
+      'refunded',
+      'Nexa explicitly confirmed the refund in its cancellation response.'
+    );
+
+    return {
+      confirmed: true,
+      reason: 'nexa_cancel_response_refunded'
+    };
   }
 
   const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
