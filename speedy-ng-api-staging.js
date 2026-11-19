@@ -4337,6 +4337,619 @@ async function nexarVisualNumberMarkup(env, country, service) {
     markup_value: 0
   };
 }
+async function nexarVisualOrderRoutes(request, env, url, path, method) {
+  const base = '/api/customer/visual-numbers/prime';
+  const purchasePath = `${base}/purchase`;
+  const orderPrefix = `${base}/orders/`;
+
+  const isPurchase = method === 'POST' && path === purchasePath;
+  const isOrder = path.startsWith(orderPrefix);
+
+  if (!isPurchase && !isOrder) return null;
+
+  const customer = await getCustomer(request, env);
+  if (!customer) {
+    return jsonError('A verified customer login is required.', 401, request);
+  }
+
+  await ensureCustomerWallets(env, customer.id);
+  await ensureVisualOrderSchema(env);
+
+  if (isPurchase) {
+    let body;
+
+    try {
+      body = await readBody(request);
+    } catch {
+      return jsonError('Invalid purchase request.', 400, request);
+    }
+
+    const country = String(body?.country || '').trim();
+    const service = String(body?.service || '').trim();
+    const idempotencyKey = String(
+      request.headers.get('Idempotency-Key') ||
+      body?.idempotency_key ||
+      ''
+    ).trim();
+
+    if (
+      !/^[a-zA-Z0-9_-]{1,80}$/.test(country) ||
+      !/^[a-zA-Z0-9_-]{1,80}$/.test(service)
+    ) {
+      return jsonError('Choose a valid country and service.', 400, request);
+    }
+
+    if (!/^[a-zA-Z0-9._:-]{16,120}$/.test(idempotencyKey)) {
+      return jsonError('A valid purchase reference is required.', 400, request);
+    }
+
+    const requestHash = await hash(`nexar:prime:${country}:${service}`);
+
+    const prior = await env.DB.prepare(`
+      SELECT r.request_hash, r.order_id
+      FROM customer_order_requests r
+      WHERE r.customer_id=? AND r.idempotency_key=?
+    `).bind(customer.id, idempotencyKey).first();
+
+    if (prior) {
+      if (prior.request_hash !== requestHash) {
+        return jsonError('This purchase reference was already used.', 409, request);
+      }
+
+      const existing = await getVisualOrder(env, customer.id, prior.order_id);
+      if (!existing) {
+        return jsonError('Existing order needs reconciliation.', 202, request);
+      }
+
+      let delivery = null;
+      try {
+        delivery = existing.delivery_json
+          ? JSON.parse(existing.delivery_json)
+          : null;
+      } catch {}
+
+      delete existing.delivery_json;
+
+      return respond({
+        ok: true,
+        duplicate_request: true,
+        order: customerSafeOrder(existing),
+        delivery
+      }, 200, request);
+    }
+
+    let quoteResult;
+
+    try {
+      quoteResult = await nexarCall(
+        env,
+        'virtual-numbers/price',
+        {
+          method: 'POST',
+          params: { driver: 'prime' },
+          body: { country, service }
+        }
+      );
+    } catch (error) {
+      return jsonError(
+        providerErrorMessage(error),
+        error?.status === 429 ? 429 : 502,
+        request
+      );
+    }
+
+    const quote = providerEnvelope(quoteResult.data);
+    const supplierPriceMinor = Number(
+      quote?.price?.amount ?? quote?.amount
+    );
+
+    const stock = Number(
+      quote?.stock ??
+      quote?.available_stock ??
+      quote?.availability?.stock
+    );
+
+    if (
+      !Number.isSafeInteger(supplierPriceMinor) ||
+      supplierPriceMinor <= 0
+    ) {
+      return jsonError('Nexa returned an invalid price. No money was taken.', 502, request);
+    }
+
+    if (Number.isFinite(stock) && stock < 1) {
+      return jsonError('This number is currently unavailable.', 409, request);
+    }
+
+    const markup = await nexarVisualNumberMarkup(env, country, service);
+    const markupValue = Number(markup.markup_value || 0);
+
+    if (!Number.isFinite(markupValue) || markupValue < 0) {
+      return jsonError('The Visual Numbers markup is invalid.', 500, request);
+    }
+
+    const supplierUsd = supplierPriceMinor / 100;
+    const customerUsd = markup.markup_type === 'fixed'
+      ? supplierUsd + markupValue
+      : supplierUsd * (1 + markupValue / 100);
+
+    const customerAmountMinor = Math.round(customerUsd * 100);
+
+    if (
+      !Number.isSafeInteger(customerAmountMinor) ||
+      customerAmountMinor <= 0
+    ) {
+      return jsonError('The customer price is invalid.', 502, request);
+    }
+
+    const orderId = crypto.randomUUID();
+    const now = Date.now();
+    const createdAt = new Date(now).toISOString();
+    const timerDates = await visualRefundTimerDates(env, now);
+
+    const reserved = await env.DB.batch([
+      env.DB.prepare(`
+        INSERT INTO orders (
+          id, customer_id, category, service, country,
+          amount_minor, currency, status, provider,
+          created_at, updated_at, quantity, unit_amount_minor,
+          provider_service_code, provider_country_code,
+          idempotency_key, expires_at, provider_cancel_at,
+          provider_refund_confirmed
+        )
+        VALUES (
+          ?, ?, 'visual_numbers', ?, ?,
+          ?, 'USD', 'processing', 'nexar_virtual',
+          ?, ?, 1, ?, ?, ?, ?, ?, ?, 0
+        )
+      `).bind(
+        orderId,
+        customer.id,
+        service,
+        country,
+        customerAmountMinor,
+        createdAt,
+        createdAt,
+        customerAmountMinor,
+        service,
+        country,
+        idempotencyKey,
+        timerDates.customerRefundAt,
+        timerDates.providerCancelAt
+      ),
+
+      env.DB.prepare(`
+        UPDATE wallets
+        SET balance_minor=balance_minor-?, updated_at=?
+        WHERE customer_id=? AND currency='USD'
+          AND balance_minor>=?
+          AND EXISTS (
+            SELECT 1 FROM orders
+            WHERE id=? AND customer_id=? AND status='processing'
+          )
+      `).bind(
+        customerAmountMinor,
+        createdAt,
+        customer.id,
+        customerAmountMinor,
+        orderId,
+        customer.id
+      ),
+
+      env.DB.prepare(`
+        DELETE FROM orders
+        WHERE id=? AND customer_id=? AND changes()=0
+      `).bind(orderId, customer.id),
+
+      env.DB.prepare(`
+        INSERT INTO transactions (
+          id, customer_id, type, currency, amount_minor,
+          status, reference, description, created_at
+        )
+        SELECT ?, ?, 'visual_number_purchase', 'USD', ?,
+          'pending', ?, ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM orders WHERE id=? AND customer_id=?
+        )
+      `).bind(
+        crypto.randomUUID(),
+        customer.id,
+        -customerAmountMinor,
+        `VN-${orderId}`,
+        `Nexa Prime Visual Number: ${service}/${country}`,
+        createdAt,
+        orderId,
+        customer.id
+      ),
+
+      env.DB.prepare(`
+        INSERT INTO customer_order_requests (
+          customer_id, idempotency_key, request_hash, order_id, created_at
+        )
+        SELECT ?, ?, ?, ?, ?
+        WHERE EXISTS (
+          SELECT 1 FROM orders WHERE id=? AND customer_id=?
+        )
+      `).bind(
+        customer.id,
+        idempotencyKey,
+        requestHash,
+        orderId,
+        createdAt,
+        orderId,
+        customer.id
+      )
+    ]);
+
+    if (Number(reserved[1]?.meta?.changes || 0) !== 1) {
+      return jsonError('Your USD wallet balance is insufficient.', 409, request);
+    }
+
+    let providerResult;
+
+    try {
+      providerResult = await nexarCall(
+        env,
+        'virtual-numbers/orders',
+        {
+          method: 'POST',
+          params: { driver: 'prime' },
+          idempotencyKey,
+          body: {
+            country,
+            service,
+            wallet_currency: 'USD',
+            max_price: supplierPriceMinor,
+            customer_reference: orderId
+          }
+        }
+      );
+    } catch (error) {
+      const retryable =
+        error?.retryable === true ||
+        !error?.status ||
+        error.status >= 500 ||
+        error.status === 429;
+
+      if (retryable) {
+        await env.DB.prepare(`
+          UPDATE orders
+          SET status='review',
+              failure_reason=?,
+              updated_at=?
+          WHERE id=? AND status='processing'
+        `).bind(
+          'Nexa purchase outcome is uncertain. Reconciliation is required. Customer funds remain reserved.',
+          new Date().toISOString(),
+          orderId
+        ).run();
+
+        return respond({
+          ok: false,
+          order_id: orderId,
+          status: 'review',
+          message: 'Your purchase is being verified. Your funds remain protected. Please do not submit another order.'
+        }, 202, request);
+      }
+
+      const failedAt = new Date().toISOString();
+
+      await env.DB.prepare(`
+        UPDATE orders
+        SET provider_refund_confirmed=1,
+            provider_refund_at=?,
+            expires_at=?,
+            failure_reason=?,
+            updated_at=?
+        WHERE id=? AND status='processing'
+      `).bind(
+        failedAt,
+        failedAt,
+        String(error.message || 'Nexa rejected the purchase.').slice(0, 500),
+        failedAt,
+        orderId
+      ).run();
+
+      const refunded = await refundVisualOrder(
+        env,
+        customer.id,
+        orderId,
+        'Nexa definitively rejected the purchase.'
+      );
+
+      return respond({
+        ok: false,
+        order_id: orderId,
+        status: refunded ? 'failed' : 'review',
+        refunded,
+        message: refunded
+          ? 'Nexa could not issue this number. Your exact USD payment has been refunded.'
+          : 'The purchase needs reconciliation. Your funds remain protected.'
+      }, 502, request);
+    }
+
+    const providerData = providerEnvelope(providerResult.data);
+    const providerOrder =
+      providerData?.order ||
+      providerData?.data?.order ||
+      providerData?.data ||
+      providerData;
+
+    const providerOrderId = String(
+      providerOrder?.id ??
+      providerOrder?.order_id ??
+      providerData?.order_id ??
+      ''
+    ).trim();
+
+    if (!providerOrderId) {
+      await env.DB.prepare(`
+        UPDATE orders
+        SET status='review',
+            failure_reason=?,
+            updated_at=?
+        WHERE id=? AND status='processing'
+      `).bind(
+        'Nexa returned no verifiable order ID. Manual reconciliation is required.',
+        new Date().toISOString(),
+        orderId
+      ).run();
+
+      return respond({
+        ok: false,
+        order_id: orderId,
+        status: 'review',
+        message: 'Nexa is verifying this purchase. Your funds remain protected. Do not submit it again.'
+      }, 202, request);
+    }
+
+    const phone = String(
+      providerOrder?.phone_number ??
+      providerOrder?.phone ??
+      providerOrder?.number ??
+      ''
+    ).trim();
+
+    await env.DB.prepare(`
+      UPDATE orders
+      SET provider_order_id=?,
+          provider_phone=?,
+          provider_status='waiting',
+          updated_at=?
+      WHERE id=? AND customer_id=? AND status='processing'
+    `).bind(
+      providerOrderId,
+      phone || null,
+      new Date().toISOString(),
+      orderId,
+      customer.id
+    ).run();
+
+    const order = await getVisualOrder(env, customer.id, orderId);
+    if (order) delete order.delivery_json;
+
+    return respond({
+      ok: true,
+      order: customerSafeOrder(order),
+      message: 'Your Prime number order was created. Waiting for the SMS code.'
+    }, 201, request);
+  }
+
+  if (isOrder) {
+    if (method !== 'POST') {
+      return jsonError('Method not allowed.', 405, request);
+    }
+
+    const suffix = path.slice(orderPrefix.length);
+    const parts = suffix.split('/');
+
+    if (parts.length !== 2 || parts[1] !== 'check') {
+      return jsonError('Invalid order status route.', 404, request);
+    }
+
+    let orderId;
+
+    try {
+      orderId = decodeURIComponent(parts[0]);
+    } catch {
+      return jsonError('Invalid order ID.', 400, request);
+    }
+
+    const order = await getVisualOrder(env, customer.id, orderId);
+
+    if (!order || order.provider !== 'nexar_virtual') {
+      return jsonError('Prime order not found.', 404, request);
+    }
+
+    if (order.status === 'completed' || order.status === 'failed') {
+      let delivery = null;
+      try {
+        delivery = order.delivery_json
+          ? JSON.parse(order.delivery_json)
+          : null;
+      } catch {}
+
+      delete order.delivery_json;
+
+      return respond({
+        ok: true,
+        order: customerSafeOrder(order),
+        delivery
+      }, 200, request);
+    }
+
+    if (!order.provider_order_id) {
+      return respond({
+        ok: false,
+        status: 'review',
+        order: customerSafeOrder(order),
+        message: 'This purchase is awaiting provider reconciliation. Do not place it again.'
+      }, 202, request);
+    }
+
+    let result;
+
+    try {
+      result = await nexarCall(
+        env,
+        `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/status`,
+        { params: { driver: 'prime' } }
+      );
+    } catch (error) {
+      return respond({
+        ok: false,
+        status: order.status,
+        message: 'Nexa status is temporarily unavailable. Your funds remain protected.'
+      }, 202, request);
+    }
+
+    const statusData = providerEnvelope(result.data);
+    const providerStatus = String(
+      statusData?.status || ''
+    ).toLowerCase();
+
+    const now = new Date().toISOString();
+
+    if (providerStatus === 'received') {
+      const code = String(statusData?.code || '').trim();
+
+      if (!code) {
+        return respond({
+          ok: false,
+          status: 'review',
+          message: 'Nexa reported a received message without a readable code.'
+        }, 202, request);
+      }
+
+      const delivery = {
+        phone_number: order.provider_phone || '',
+        sms_code: code,
+        content: statusData?.content || ''
+      };
+
+      await env.DB.batch([
+        env.DB.prepare(`
+          UPDATE orders
+          SET status='completed',
+              provider_status=?,
+              delivery_json=?,
+              updated_at=?
+          WHERE id=? AND customer_id=?
+            AND provider='nexar_virtual'
+            AND status IN ('processing','review')
+        `).bind(
+          providerStatus,
+          JSON.stringify(delivery),
+          now,
+          orderId,
+          customer.id
+        ),
+        env.DB.prepare(`
+          UPDATE transactions
+          SET status='successful'
+          WHERE reference=? AND status='pending'
+        `).bind(`VN-${orderId}`)
+      ]);
+
+      const updated = await getVisualOrder(env, customer.id, orderId);
+      delete updated.delivery_json;
+
+      return respond({
+        ok: true,
+        status: 'completed',
+        order: customerSafeOrder(updated),
+        delivery,
+        message: 'SMS code received successfully.'
+      }, 200, request);
+    }
+
+    if (
+      providerStatus === 'waiting' &&
+      order.provider_cancel_at &&
+      Date.now() >= Date.parse(order.provider_cancel_at) &&
+      Number(order.provider_refund_confirmed || 0) !== 1
+    ) {
+      try {
+        const cancelled = await nexarCall(
+          env,
+          `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/cancel`,
+          {
+            method: 'POST',
+            params: { driver: 'prime' }
+          }
+        );
+
+        const cancelData = providerEnvelope(cancelled.data);
+
+        if (cancelData?.refunded === true ||
+            cancelData?.data?.refunded === true) {
+          await confirmVisualProviderRefund(
+            env,
+            orderId,
+            'refunded',
+            'Nexa confirmed the order refund.'
+          );
+        }
+      } catch (error) {
+        // A failed cancellation is not proof of a refund.
+        console.error('Nexa Prime cancellation pending:', error?.message || error);
+      }
+    }
+
+    if (
+      providerStatus === 'refunded' &&
+      Number(order.provider_refund_confirmed || 0) !== 1
+    ) {
+      await confirmVisualProviderRefund(
+        env,
+        orderId,
+        providerStatus,
+        'Nexa confirmed the provider refund.'
+      );
+    }
+
+    const latest = await getVisualOrder(env, customer.id, orderId);
+
+    let refunded = false;
+
+    if (
+      latest &&
+      Number(latest.provider_refund_confirmed || 0) === 1 &&
+      latest.expires_at &&
+      Date.now() >= Date.parse(latest.expires_at)
+    ) {
+      refunded = await refundVisualOrder(
+        env,
+        customer.id,
+        orderId,
+        'Nexa confirmed the refund and the customer countdown expired.'
+      );
+    }
+
+    const finalOrder = await getVisualOrder(env, customer.id, orderId);
+    let delivery = null;
+
+    try {
+      delivery = finalOrder?.delivery_json
+        ? JSON.parse(finalOrder.delivery_json)
+        : null;
+    } catch {}
+
+    if (finalOrder) delete finalOrder.delivery_json;
+
+    return respond({
+      ok: true,
+      status: finalOrder?.status || order.status,
+      order: customerSafeOrder(finalOrder),
+      delivery,
+      refunded,
+      message: refunded
+        ? 'Your exact USD payment has been returned to your wallet.'
+        : 'Your Prime order is being checked.'
+    }, 200, request);
+  }
+
+  return null;
+  }
 async function nexarVirtualNumberRoutes(request, env, url, path, method) {
   const base = '/api/customer/official-numbers';
 
@@ -5483,8 +6096,14 @@ if (supportResponse) return supportResponse;
 
   const socialOrderResponse = await socialLogOrderRoutes(request, env, url, path, method);
   if (socialOrderResponse) return socialOrderResponse;
-  const visualOrderResponse = await visualNumberOrderRoutes(request, env, url, path, method);
-  if (visualOrderResponse) return visualOrderResponse;
+  const nexarVisualOrderResponse = await nexarVisualOrderRoutes(
+  request,
+  env,
+  url,
+  path,
+  method
+);
+if (nexarVisualOrderResponse) return nexarVisualOrderResponse;
 
   const providerCustomerResponse = await youngpgCustomerRoutes(request, env, url, path, method);
   if (providerCustomerResponse) return providerCustomerResponse;
