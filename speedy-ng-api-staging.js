@@ -4310,18 +4310,18 @@ async function nexarSocialBoostServicesCached(env, driver) {
 
   return pending;
 }
-async function nexarOfficialNumberMarkup(env, country, service) {
+async function nexarVisualNumberMarkup(env, country, service) {
   const result = await env.DB.prepare(`
     SELECT markup_type, markup_value
     FROM pricing_rules
     WHERE active = 1
       AND provider IN ('nexar', '*')
-      AND product IN ('official_numbers', '*')
+      AND product IN ('visual_numbers', '*')
       AND country IN (?, '*')
       AND service IN (?, '*')
     ORDER BY
       CASE WHEN provider = 'nexar' THEN 0 ELSE 1 END,
-      CASE WHEN product = 'official_numbers' THEN 0 ELSE 1 END,
+      CASE WHEN product = 'visual_numbers' THEN 0 ELSE 1 END,
       CASE WHEN country = ? THEN 0 ELSE 1 END,
       CASE WHEN service = ? THEN 0 ELSE 1 END
     LIMIT 1
@@ -4336,7 +4336,7 @@ async function nexarOfficialNumberMarkup(env, country, service) {
     markup_type: 'percent',
     markup_value: 0
   };
-    }
+}
 async function nexarVirtualNumberRoutes(request, env, url, path, method) {
   const base = '/api/customer/official-numbers';
 
