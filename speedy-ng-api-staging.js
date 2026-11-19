@@ -4344,10 +4344,6 @@ async function nexarVirtualNumberRoutes(request, env, url, path, method) {
   const servicesPath = `${base}/services`;
   const pricePath = `${base}/price`;
 
- const countriesPath = `${base}/countries`;
-  const servicesPath = `${base}/services`;
-  const pricePath = `${base}/price`;
-
   const serviceCountriesMatch = path.match(
     /^\/api\/customer\/official-numbers\/countries\/([a-zA-Z0-9_-]{1,80})$/
   );
