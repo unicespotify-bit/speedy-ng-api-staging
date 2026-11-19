@@ -4503,24 +4503,56 @@ if (method === 'GET' && serviceCountriesMatch) {
 
       const priceData = providerEnvelope(result.data);
 
-      const baseUsdMinor = Number(
-        priceData?.price?.amount ?? priceData?.amount
-      );
+  // Inspect the actual Nexar response without exposing API credentials.
+  const priceObject =
+    priceData?.price &&
+    typeof priceData.price === 'object'
+      ? priceData.price
+      : {};
 
-      const stock = Number(
-        priceData?.stock ?? priceData?.available_stock
-      );
+  const baseUsdMinor = Number(
+    priceObject.amount ?? priceData?.amount
+  );
 
-      if (
-        !Number.isFinite(baseUsdMinor) ||
-        baseUsdMinor <= 0
-      ) {
-        return jsonError(
-          'A valid live price is not currently available.',
-          502,
-          request
-        );
-      }
+  const stockValue =
+    priceData?.stock ??
+    priceData?.available_stock ??
+    priceData?.availability?.stock ??
+    null;
+
+  const stock = Number(stockValue);
+
+  if (
+    !Number.isFinite(baseUsdMinor) ||
+    baseUsdMinor <= 0
+  ) {
+    const diagnostic = {
+      country: String(country),
+      service: String(service),
+      responseFields:
+        priceData && typeof priceData === 'object'
+          ? Object.keys(priceData)
+          : [],
+      priceFields: Object.keys(priceObject),
+      hasPriceObject: Boolean(priceData?.price),
+      requestId: result.data?.request_id || null
+    };
+
+    console.error(
+      '[SPEEDY_NEXAR_PRICE_DIAGNOSTIC]',
+      JSON.stringify(diagnostic)
+    );
+
+    return jsonError(
+      'Nexar price unavailable. Response fields: ' +
+      diagnostic.responseFields.join(', ') +
+      '. Price fields: ' +
+      diagnostic.priceFields.join(', ') +
+      '. Check staging Worker logs.',
+      502,
+      request
+    );
+  }
 
       const rateSetting = await env.DB.prepare(`
         SELECT setting_value
