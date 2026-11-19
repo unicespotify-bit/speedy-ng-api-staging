@@ -3281,7 +3281,244 @@ async function attemptVisualProviderCancellation(env, order, initialStatusRespon
     return { confirmed: false, reason: 'provider_check_error' };
   }
 }
+async function attemptNexarVisualProviderCancellation(env, order) {
+  if (
+    !order?.provider_order_id ||
+    !order?.id ||
+    order.provider !== 'nexar_virtual'
+  ) {
+    return { confirmed: false, reason: 'invalid_nexa_order' };
+  }
 
+  const now = Date.now();
+
+  if (Number(order.provider_refund_confirmed || 0) === 1) {
+    return { confirmed: true, reason: 'already_confirmed' };
+  }
+
+  if (
+    order.provider_cancel_retry_at &&
+    Date.parse(order.provider_cancel_retry_at) > now
+  ) {
+    return { confirmed: false, reason: 'retry_cooldown' };
+  }
+
+  const claimed = await claimVisualProviderStatusCheck(env, order.id, 45);
+
+  if (!claimed) {
+    return { confirmed: false, reason: 'status_check_throttled' };
+  }
+
+  const checkStatus = async () => {
+    const result = await nexarCall(
+      env,
+      `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/status`,
+      { params: { driver: 'prime' } }
+    );
+
+    return providerEnvelope(result.data);
+  };
+
+  const saveReceivedCode = async statusData => {
+    const code = String(statusData?.code || '').trim();
+
+    if (!code) {
+      return { confirmed: false, reason: 'received_without_code' };
+    }
+
+    const delivery = {
+      phone_number: order.provider_phone || '',
+      sms_code: code,
+      content: statusData?.content || ''
+    };
+
+    const nowIso = new Date().toISOString();
+
+    const result = await env.DB.prepare(`
+      UPDATE orders
+      SET status='completed',
+          provider_status='received',
+          delivery_json=?,
+          updated_at=?
+      WHERE id=?
+        AND provider='nexar_virtual'
+        AND status IN ('processing','review')
+    `).bind(
+      JSON.stringify(delivery),
+      nowIso,
+      order.id
+    ).run();
+
+    if (Number(result?.meta?.changes || 0) === 1) {
+      await env.DB.prepare(`
+        UPDATE transactions
+        SET status='successful'
+        WHERE reference=? AND status='pending'
+      `).bind(`VN-${order.id}`).run();
+    }
+
+    return {
+      confirmed: false,
+      completed: true,
+      reason: 'sms_received'
+    };
+  };
+
+  const confirmIfRefunded = async statusData => {
+    const status = String(statusData?.status || '').toLowerCase();
+
+    if (status === 'received') {
+      return saveReceivedCode(statusData);
+    }
+
+    if (
+      status === 'refunded' ||
+      statusData?.refunded === true ||
+      statusData?.data?.refunded === true
+    ) {
+      await confirmVisualProviderRefund(
+        env,
+        order.id,
+        'refunded',
+        'Nexa confirmed the provider refund.'
+      );
+
+      return {
+        confirmed: true,
+        reason: 'nexa_refund_confirmed'
+      };
+    }
+
+    return {
+      confirmed: false,
+      reason: status || 'refund_not_confirmed'
+    };
+  };
+
+  let statusData = await checkStatus();
+
+  const firstCheck = await confirmIfRefunded(statusData);
+
+  if (
+    firstCheck.confirmed ||
+    firstCheck.completed ||
+    firstCheck.reason === 'received_without_code'
+  ) {
+    return firstCheck;
+  }
+
+  const providerStatus = String(statusData?.status || '').toLowerCase();
+
+  const cancelAt = order.provider_cancel_at
+    ? Date.parse(order.provider_cancel_at)
+    : (order.expires_at ? Date.parse(order.expires_at) - 15000 : now);
+
+  if (!Number.isFinite(cancelAt) || now < cancelAt) {
+    return { confirmed: false, reason: 'not_due' };
+  }
+
+  if (!['waiting', 'expired', 'cancelled'].includes(providerStatus)) {
+    return {
+      confirmed: false,
+      reason: providerStatus || 'unknown_provider_status'
+    };
+  }
+
+  try {
+    await nexarCall(
+      env,
+      `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/cancel`,
+      {
+        method: 'POST',
+        params: { driver: 'prime' }
+      }
+    );
+  } catch (error) {
+    console.error(
+      'Nexa Prime cancellation request pending:',
+      error?.message || error
+    );
+  }
+
+  // Always check the provider again after cancellation.
+  // A cancellation response alone is not proof of a refund.
+  statusData = await checkStatus();
+
+  const finalCheck = await confirmIfRefunded(statusData);
+
+  if (
+    finalCheck.confirmed ||
+    finalCheck.completed ||
+    finalCheck.reason === 'received_without_code'
+  ) {
+    return finalCheck;
+  }
+
+  const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+  await env.DB.prepare(`
+    UPDATE orders
+    SET provider_status=?,
+        failure_reason=?,
+        provider_cancel_retry_at=?,
+        updated_at=?
+    WHERE id=?
+      AND provider='nexar_virtual'
+      AND status IN ('processing','review')
+  `).bind(
+    String(statusData?.status || 'unknown').slice(0, 120),
+    'Nexa cancellation is awaiting confirmed provider refund. Customer funds remain protected.',
+    retryAt,
+    new Date().toISOString(),
+    order.id
+  ).run();
+
+  return {
+    confirmed: false,
+    reason: 'awaiting_nexa_refund_confirmation'
+  };
+}
+
+
+async function attemptNexarVisualProviderCancellationSafely(env, order) {
+  try {
+    return await attemptNexarVisualProviderCancellation(env, order);
+  } catch (error) {
+    const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    try {
+      await env.DB.prepare(`
+        UPDATE orders
+        SET failure_reason=?,
+            provider_cancel_retry_at=?,
+            updated_at=?
+        WHERE id=?
+          AND provider='nexar_virtual'
+          AND status IN ('processing','review')
+      `).bind(
+        'Nexa connection or cancellation check failed. Retrying in five minutes.',
+        retryAt,
+        new Date().toISOString(),
+        order.id
+      ).run();
+    } catch (dbError) {
+      console.error(
+        'Could not save Nexa Visual Number retry:',
+        dbError?.message || dbError
+      );
+    }
+
+    console.error(
+      'Nexa Visual Number cancellation check failed:',
+      error?.message || error
+    );
+
+    return {
+      confirmed: false,
+      reason: 'provider_check_error'
+    };
+  }
+}
 async function visualRefundTimerDates(env, baseTime = Date.now()) {
   const customerSetting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='visual_number_customer_refund_seconds'").first();
   const supplierSetting = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key='visual_number_supplier_cancel_seconds'").first();
