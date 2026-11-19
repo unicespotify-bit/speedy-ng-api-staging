@@ -4467,10 +4467,95 @@ async function nexarVirtualNumberRoutes(request, env, url, path, method) {
         }
       );
 
+      const priceData = providerEnvelope(result.data);
+
+      const baseUsdMinor = Number(
+        priceData?.price?.amount ?? priceData?.amount
+      );
+
+      const stock = Number(
+        priceData?.stock ?? priceData?.available_stock
+      );
+
+      if (
+        !Number.isFinite(baseUsdMinor) ||
+        baseUsdMinor <= 0
+      ) {
+        return jsonError(
+          'A valid live price is not currently available.',
+          502,
+          request
+        );
+      }
+
+      const rateSetting = await env.DB.prepare(`
+        SELECT setting_value
+        FROM app_settings
+        WHERE setting_key = 'usd_ngn_rate'
+      `).first();
+
+      const exchangeRate = Number(
+        rateSetting?.setting_value || 1500
+      );
+
+      if (
+        !Number.isFinite(exchangeRate) ||
+        exchangeRate <= 0
+      ) {
+        return jsonError(
+          'The USD exchange rate is not configured correctly.',
+          500,
+          request
+        );
+      }
+
+      const markup = await nexarOfficialNumberMarkup(
+        env,
+        country,
+        service
+      );
+
+      const markupValue = Number(markup.markup_value || 0);
+
+      if (
+        !Number.isFinite(markupValue) ||
+        markupValue < 0
+      ) {
+        return jsonError(
+          'The pricing markup is not configured correctly.',
+          500,
+          request
+        );
+      }
+
+      const baseUsd = baseUsdMinor / 100;
+
+      const customerUsd = markup.markup_type === 'fixed'
+        ? baseUsd + markupValue
+        : baseUsd * (1 + markupValue / 100);
+
+      const customerUsdMinor = Math.round(customerUsd * 100);
+
+      const customerNgnMinor = Math.round(
+        customerUsdMinor * exchangeRate
+      );
+
+      const finalPrice = {
+        ...priceData,
+        price: {
+          ...(priceData.price || {}),
+          amount: String(customerUsdMinor)
+        },
+        price_alt: {
+          ...(priceData.price_alt || {}),
+          amount: String(customerNgnMinor)
+        }
+      };
+
       return respond({
         ok: true,
         driver,
-        price: providerEnvelope(result.data)
+        price: finalPrice
       }, 200, request);
 
     } catch (error) {
