@@ -4575,11 +4575,11 @@ if (method === 'GET' && serviceCountriesMatch) {
         );
       }
 
-      const markup = await nexarOfficialNumberMarkup(
-        env,
-        country,
-        service
-      );
+      const markup = await nexarVisualNumberMarkup(
+  env,
+  country,
+  service
+);
 
       const markupValue = Number(markup.markup_value || 0);
 
