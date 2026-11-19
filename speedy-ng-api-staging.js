@@ -4344,9 +4344,19 @@ async function nexarVirtualNumberRoutes(request, env, url, path, method) {
   const servicesPath = `${base}/services`;
   const pricePath = `${base}/price`;
 
+ const countriesPath = `${base}/countries`;
+  const servicesPath = `${base}/services`;
+  const pricePath = `${base}/price`;
+
+  const serviceCountriesMatch = path.match(
+    /^\/api\/customer\/official-numbers\/countries\/([a-zA-Z0-9_-]{1,80})$/
+  );
+
   const isOfficialNumbersRoute =
     (method === 'GET' &&
-      (path === countriesPath || path === servicesPath)) ||
+      (path === countriesPath ||
+       path === servicesPath ||
+       Boolean(serviceCountriesMatch))) ||
     (method === 'POST' && path === pricePath);
 
   if (!isOfficialNumbersRoute) return null;
@@ -4411,7 +4421,35 @@ async function nexarVirtualNumberRoutes(request, env, url, path, method) {
       );
     }
   }
+if (method === 'GET' && serviceCountriesMatch) {
+    const serviceId = serviceCountriesMatch[1];
 
+    try {
+      const result = await nexarCall(
+        env,
+        `virtual-numbers/countries/${encodeURIComponent(serviceId)}`,
+        { params: { driver } }
+      );
+
+      const data = providerEnvelope(result.data);
+
+      return respond({
+        ok: true,
+        driver,
+        service: serviceId,
+        countries: Array.isArray(data)
+          ? data
+          : (data?.countries || data?.data || [])
+      }, 200, request);
+
+    } catch (error) {
+      return jsonError(
+        providerErrorMessage(error),
+        error?.status === 429 ? 429 : 502,
+        request
+      );
+    }
+                                        }
   if (method === 'GET' && path === servicesPath) {
     try {
       const result = await nexarCall(
