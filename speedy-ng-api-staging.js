@@ -3063,7 +3063,7 @@ async function claimVisualProviderStatusCheck(env, orderId, cooldownSeconds = 45
     SET provider_last_status_check_at=?
     WHERE id=?
       AND category='visual_numbers'
-      AND provider='youngpg_virtual'
+      AND provider IN ('youngpg_virtual', 'nexar_virtual')
       AND status IN ('processing','review')
       AND (
         provider_last_status_check_at IS NULL
@@ -6987,28 +6987,28 @@ async function processExpiredVisualNumberOrders(env) {
   await ensureVisualOrderSchema(env);
 
   const due = await env.DB.prepare(`
-    SELECT id, customer_id, provider_order_id, provider_phone,
-      provider_cancel_at, expires_at, provider_refund_confirmed,
-      provider_cancel_retry_at, status
+    SELECT id, customer_id, provider, provider_order_id,
+      provider_phone, provider_cancel_at, expires_at,
+      provider_refund_confirmed, provider_cancel_retry_at, status
     FROM orders
     WHERE category='visual_numbers'
-      AND provider='youngpg_virtual'
+      AND provider IN ('youngpg_virtual', 'nexar_virtual')
       AND status IN ('processing','review')
       AND (
-  provider_order_id IS NOT NULL
-  OR COALESCE(provider_refund_confirmed, 0) = 1
-)
+        provider_order_id IS NOT NULL
+        OR COALESCE(provider_refund_confirmed, 0) = 1
+      )
       AND (
         COALESCE(provider_refund_confirmed, 0) = 1
         OR provider_cancel_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         OR expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       )
-    AND (
+      AND (
         COALESCE(provider_refund_confirmed, 0) = 1
         OR provider_cancel_retry_at IS NULL
         OR provider_cancel_retry_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       )
-          AND (
+      AND (
         COALESCE(provider_refund_confirmed, 0) = 1
         OR provider_last_status_check_at IS NULL
         OR julianday(provider_last_status_check_at)
@@ -7017,13 +7017,12 @@ async function processExpiredVisualNumberOrders(env) {
     ORDER BY
       CASE
         WHEN COALESCE(provider_refund_confirmed, 0) = 1 THEN 0
-        WHEN provider_cancel_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-          OR expires_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now') THEN 1
-        ELSE 2
+        ELSE 1
       END ASC,
       created_at ASC
-LIMIT 20
+    LIMIT 20
   `).all();
+
   let checked = 0;
   let providerConfirmed = 0;
   let completed = 0;
@@ -7034,12 +7033,15 @@ LIMIT 20
     checked++;
 
     try {
+      // A provider-confirmed refund may be credited only after
+      // the automatic one-hour waiting period has passed.
       if (Number(order.provider_refund_confirmed || 0) === 1) {
         const wasRefunded = await refundVisualOrder(
           env,
           order.customer_id,
           order.id,
-          'YoungPG and provider refund confirmed.'
+          'Provider refund confirmed. Automatic refund processing.',
+          true
         );
 
         if (wasRefunded) refunded++;
@@ -7048,26 +7050,53 @@ LIMIT 20
         continue;
       }
 
-      const result = await attemptVisualProviderCancellationSafely(env, order);
+      let result;
+
+      if (order.provider === 'youngpg_virtual') {
+        result = await attemptVisualProviderCancellationSafely(
+          env,
+          order
+        );
+      } else if (order.provider === 'nexar_virtual') {
+        result = await attemptNexarVisualProviderCancellationSafely(
+          env,
+          order
+        );
+      } else {
+        deferred++;
+        continue;
+      }
 
       if (result.confirmed) providerConfirmed++;
       else if (result.completed) completed++;
-      else if (!['not_due', 'status_check_throttled'].includes(result.reason)) deferred++;
+      else if (
+        ![
+          'not_due',
+          'status_check_throttled',
+          'retry_cooldown'
+        ].includes(result.reason)
+      ) {
+        deferred++;
+      }
 
-      // If cancellation was confirmed, attempt the customer refund.
-      // refundVisualOrder checks that the rental expiry has passed.
+      // Provider confirmation is not enough by itself:
+      // refundVisualOrder enforces expiry and the one-hour
+      // automatic refund delay.
       if (result.confirmed) {
         const wasRefunded = await refundVisualOrder(
           env,
           order.customer_id,
           order.id,
-          'YoungPG cancellation and provider refund confirmed.'
+          'Provider cancellation confirmed. Automatic refund processing.',
+          true
         );
 
         if (wasRefunded) refunded++;
       }
+
     } catch (error) {
       deferred++;
+
       console.error(
         'Visual Numbers automatic refund check deferred:',
         order.id,
