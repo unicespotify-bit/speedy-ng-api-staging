@@ -3652,13 +3652,33 @@ if (!price) {
     const unitUsd = markup.markup_type === 'fixed' ? baseUsd + value : baseUsd * (1 + value / 100);
     const unitMinor = Math.round(unitUsd * 100);
     if (!Number.isSafeInteger(unitMinor) || unitMinor <= 0) return jsonError('The calculated price is invalid.', 502, request);
-    return respond({
+    const customerPriceUsd = Number((unitMinor / 100).toFixed(2));
+const providerPriceUsd = Number(baseUsd.toFixed(4));
+
+const stock = price.stock === null || price.stock === undefined
+  ? null
+  : Number(price.stock);
+
+return respond({
   ok: true,
   quote: {
     country,
     service,
-    stock: price.stock,
+    stock,
+    available: stock,
+    provider_price_ngn: price.cost_ngn,
+    provider_price_usd: providerPriceUsd,
     exchange_rate_ngn_per_usd: rate,
+    customer_price_usd: customerPriceUsd,
+    customer_price_minor: unitMinor,
+    currency: 'USD'
+  },
+  inventory: {
+    available: stock,
+    provider_price_ngn: price.cost_ngn,
+    provider_price_usd: providerPriceUsd,
+    exchange_rate_ngn_per_usd: rate,
+    customer_price_usd: customerPriceUsd,
     customer_price_minor: unitMinor,
     currency: 'USD'
   }
