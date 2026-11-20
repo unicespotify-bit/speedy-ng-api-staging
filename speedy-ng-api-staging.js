@@ -5320,15 +5320,27 @@ message: 'Your refund becomes available when the countdown reaches zero.'
 
     if (finalOrder) delete finalOrder.delivery_json;
 
+    const refundAvailable = Boolean(
+      finalOrder &&
+      finalOrder.status !== 'completed' &&
+      finalOrder.status !== 'failed' &&
+      Number(finalOrder.provider_refund_confirmed || 0) === 1 &&
+      finalOrder.expires_at &&
+      Date.now() >= Date.parse(finalOrder.expires_at)
+    );
+
     return respond({
       ok: true,
       status: finalOrder?.status || order.status,
       order: customerSafeOrder(finalOrder),
       delivery,
       refunded,
+      refund_available: refundAvailable,
       message: refunded
         ? 'Your exact USD payment has been returned to your wallet.'
-        : 'Your Prime order is being checked.'
+        : refundAvailable
+          ? 'Nexa confirmed the cancellation. Your refund is ready.'
+          : 'Your Prime order is being checked.'
     }, 200, request);
   }
 
