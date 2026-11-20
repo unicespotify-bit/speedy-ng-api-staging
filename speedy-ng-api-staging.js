@@ -5073,8 +5073,11 @@ async function nexarVisualOrderRoutes(request, env, url, path, method) {
     const suffix = path.slice(orderPrefix.length);
     const parts = suffix.split('/');
 
-    if (parts.length !== 2 || parts[1] !== 'check') {
-      return jsonError('Invalid order status route.', 404, request);
+    if (
+parts.length !== 2 ||
+!['check', 'cancel'].includes(parts[1])
+) {
+return jsonError('Invalid Prime order route.', 404, request);
     }
 
     let orderId;
@@ -5107,7 +5110,57 @@ async function nexarVisualOrderRoutes(request, env, url, path, method) {
         delivery
       }, 200, request);
     }
+  if (parts[1] === 'cancel') {
+if (!order.expires_at || Date.now() < Date.parse(order.expires_at)) {
+return respond({
+ok: false,
+status: order.status,
+refund_available_at: order.expires_at,
+message: 'Your refund becomes available when the countdown reaches zero.'
+}, 409, request);
+}
 
+  if (Number(order.provider_refund_confirmed || 0) !== 1) {
+    await attemptNexarVisualProviderCancellationSafely(env, order);
+  }
+
+  const latest = await getVisualOrder(env, customer.id, orderId);
+
+  if (latest?.status === 'completed') {
+    return respond({
+      ok: true,
+      order: customerSafeOrder(latest),
+      refunded: false,
+      message: 'Your SMS code arrived. This order is successful and cannot be refunded.'
+    }, 200, request);
+  }
+
+  if (Number(latest?.provider_refund_confirmed || 0) !== 1) {
+    return respond({
+      ok: false,
+      status: latest?.status || order.status,
+      message: 'Nexa has not yet confirmed the refund. Your money remains protected.'
+    }, 409, request);
+  }
+
+  const refunded = await refundVisualOrder(
+    env,
+    customer.id,
+    orderId,
+    'Customer requested Prime Visual Numbers refund after provider confirmation.'
+  );
+
+  const updated = await getVisualOrder(env, customer.id, orderId);
+
+  return respond({
+    ok: true,
+    order: customerSafeOrder(updated),
+    refunded,
+    message: refunded
+      ? 'Your exact USD payment has been returned to your wallet.'
+      : 'The refund has already been processed or the order state has changed.'
+  }, 200, request);
+  }
     if (!order.provider_order_id) {
       return respond({
         ok: false,
