@@ -3442,43 +3442,70 @@ async function attemptNexarVisualProviderCancellation(env, order) {
     );
   }
 
-  // Check provider status again after cancellation.
-  // This protects customers if an SMS arrives during cancellation.
-  statusData = await checkStatus();
+  // Inspect Nexa's actual cancellation response first.
+const cancellationData = cancelResponse
+? providerEnvelope(cancelResponse.data)
+: null;
 
-  const finalCheck = await confirmIfRefunded(statusData);
+const cancellationRefundConfirmed =
+cancellationData?.refunded === true ||
+cancellationData?.data?.refunded === true;
 
-  // Never refund an order that has received an SMS.
-  if (
-    finalCheck.confirmed ||
-    finalCheck.completed ||
-    finalCheck.reason === 'received_without_code'
-  ) {
-    return finalCheck;
-  }
+// Check provider status again after cancellation.
+// This protects customers if an SMS arrives during cancellation.
+let finalStatusCheckFailed = false;
 
-  // Inspect Nexa's actual cancellation response.
-  const cancellationData = cancelResponse
-    ? providerEnvelope(cancelResponse.data)
-    : null;
+try {
+statusData = await checkStatus();
+} catch (error) {
+finalStatusCheckFailed = true;
 
-  // Only an explicit refund confirmation is accepted.
-  if (
-    cancellationData?.refunded === true ||
-    cancellationData?.data?.refunded === true
-  ) {
-    await confirmVisualProviderRefund(
-      env,
-      order.id,
-      'refunded',
-      'Nexa explicitly confirmed the refund in its cancellation response.'
-    );
+console.error(
+  'Nexa post-cancellation status check failed:',
+  error?.message || error
+);
 
-    return {
-      confirmed: true,
-      reason: 'nexa_cancel_response_refunded'
-    };
-  }
+}
+
+// If the status check works, an SMS received always takes priority.
+if (!finalStatusCheckFailed) {
+const finalCheck = await confirmIfRefunded(statusData);
+
+if (
+  finalCheck.confirmed ||
+  finalCheck.completed ||
+  finalCheck.reason === 'received_without_code'
+) {
+  return finalCheck;
+}
+
+}
+
+// If Nexa explicitly confirms the refund, retain that confirmation.
+if (cancellationRefundConfirmed) {
+await confirmVisualProviderRefund(
+env,
+order.id,
+'refunded',
+'Nexa explicitly confirmed the refund in its cancellation response.'
+);
+
+return {
+  confirmed: true,
+  reason: finalStatusCheckFailed
+    ? 'nexa_cancel_response_refunded_status_check_failed'
+    : 'nexa_cancel_response_refunded'
+};
+
+}
+
+// A failed status check without explicit refund confirmation
+// must never authorize a customer refund.
+if (finalStatusCheckFailed) {
+throw new Error(
+'Nexa status recheck failed and provider refund is not confirmed.'
+);
+}
 
   const retryAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
 
