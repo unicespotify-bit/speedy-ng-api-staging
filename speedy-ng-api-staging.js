@@ -5831,15 +5831,16 @@ provider_response_json,
 ...safeOrder
 } = order;
 
-5834: return {
-5835: ...safeOrder,
-5836: ...(order.category === 'visual_numbers'
-5837: ? { visual_route: provider === 'nexar_virtual' ? 'prime' : 'standard' }
-5838: : {}),
-5839: ...(order.category === 'visual_numbers' && provider_phone
-5840: ? { phone_number: provider_phone }
-5841: : {})
-5842: };
+  return {
+  ...safeOrder,
+  ...(order.category === 'visual_numbers'
+    ? { visual_route: provider === 'nexar_virtual' ? 'prime' : 'standard' }
+    : {}),
+  ...(order.category === 'visual_numbers' && provider_phone
+    ? { phone_number: provider_phone }
+    : {})
+};
+}
 async function nexarSocialBoostPurchase(request, env, url) {
   const customer = await getCustomer(request, env);
   if (!customer) return jsonError('A verified customer login is required.', 401, request);
