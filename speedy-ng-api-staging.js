@@ -6500,6 +6500,24 @@ if (method === "POST" && path === "/api/webhooks/nexar") {
     await env.DB.prepare("SELECT 1").first();
     return respond({ ok: true, service: "Speedy.ng API", database: "connected" }, 200, request);
   }
+  // Public Telegram button settings
+  if (method === "GET" && path === "/api/public/telegram-settings") {
+    const rows = await env.DB.prepare(
+      "SELECT setting_key, setting_value FROM app_settings WHERE setting_key IN ('support_telegram','support_telegram_enabled')"
+    ).all();
+
+    const values = Object.fromEntries(
+      (rows.results || []).map(row => [row.setting_key, row.setting_value])
+    );
+
+    return respond({
+      ok: true,
+      enabled: values.support_telegram_enabled === undefined
+        ? true
+        : values.support_telegram_enabled === "true",
+      telegram_url: values.support_telegram || "https://t.me/fastsms44"
+    }, 200, request);
+  }
 // Handle support inbox before the admin-only fallback.
 const supportResponse = await supportRoutes(
   request,
