@@ -6943,9 +6943,7 @@ if (method === "PATCH" && nexarReadMatch) {
       ? body.settings
       : (typeof body.key === "string" ? { [body.key]: body.value } : null);
     if (!values || Object.keys(values).length === 0) return jsonError("No settings were provided.", 400, request);
-    const allowed = new Set(["usd_ngn_rate", "maintenance_mode", "support_telegram", "support_email", "global_markup", "visual_number_timeout_minutes", "visual_number_supplier_cancel_seconds", "visual_number_customer_refund_seconds"]);
-    const mergedSettings = {};
-    for (const key of ["visual_number_supplier_cancel_seconds", "visual_number_customer_refund_seconds"]) {
+    const allowed = new Set(["usd_ngn_rate", "maintenance_mode", "support_telegram", "support_telegram_enabled", "support_email", "global_markup", "visual_number_timeout_minutes", "visual_number_supplier_cancel_seconds", "visual_number_customer_refund_seconds"]); {
       const existing = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key=?").bind(key).first();
       mergedSettings[key] = Number(values[key] ?? existing?.setting_value ?? (key === "visual_number_supplier_cancel_seconds" ? 255 : 270));
     }
@@ -6961,6 +6959,13 @@ if (method === "PATCH" && nexarReadMatch) {
       if (key === "visual_number_timeout_minutes" && (!Number.isInteger(Number(value)) || Number(value) < 5 || Number(value) > 60)) return jsonError("Visual Numbers timeout must be between 5 and 60 minutes.", 400, request);
       if (["visual_number_supplier_cancel_seconds", "visual_number_customer_refund_seconds"].includes(key) && (!Number.isInteger(Number(value)) || Number(value) < 0 || Number(value) > 3600)) return jsonError("Visual Numbers timer values must be whole seconds from 0 to 3600.", 400, request);
       if (key === "maintenance_mode" && !["true", "false"].includes(value.toLowerCase())) return jsonError("Maintenance mode must be true or false.", 400, request);
+      if (key === "support_telegram_enabled" && !["true", "false"].includes(value.toLowerCase())) {
+  return jsonError("Telegram button setting must be true or false.", 400, request);
+}
+
+if (key === "support_telegram" && !/^https:\/\/(t\.me|telegram\.me)\/[A-Za-z0-9_+/-]+\/?$/.test(value)) {
+  return jsonError("Enter a valid Telegram link.", 400, request);
+}
       statements.push(env.DB.prepare(`INSERT INTO app_settings (setting_key, setting_value, updated_at, updated_by) VALUES (?, ?, ?, ?) ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`).bind(key, value, now, admin.id));
     }
     await env.DB.batch(statements);
