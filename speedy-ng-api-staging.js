@@ -6943,10 +6943,33 @@ if (method === "PATCH" && nexarReadMatch) {
       ? body.settings
       : (typeof body.key === "string" ? { [body.key]: body.value } : null);
     if (!values || Object.keys(values).length === 0) return jsonError("No settings were provided.", 400, request);
-    const allowed = new Set(["usd_ngn_rate", "maintenance_mode", "support_telegram", "support_telegram_enabled", "support_email", "global_markup", "visual_number_timeout_minutes", "visual_number_supplier_cancel_seconds", "visual_number_customer_refund_seconds"]); {
-      const existing = await env.DB.prepare("SELECT setting_value FROM app_settings WHERE setting_key=?").bind(key).first();
-      mergedSettings[key] = Number(values[key] ?? existing?.setting_value ?? (key === "visual_number_supplier_cancel_seconds" ? 255 : 270));
-    }
+    const allowed = new Set([
+  "usd_ngn_rate",
+  "maintenance_mode",
+  "support_telegram",
+  "support_telegram_enabled",
+  "support_email",
+  "global_markup",
+  "visual_number_timeout_minutes",
+  "visual_number_supplier_cancel_seconds",
+  "visual_number_customer_refund_seconds"
+]);
+
+const mergedSettings = {};
+
+for (const key of [
+  "visual_number_supplier_cancel_seconds",
+  "visual_number_customer_refund_seconds"
+]) {
+  const existing = await env.DB.prepare(
+    "SELECT setting_value FROM app_settings WHERE setting_key=?"
+  ).bind(key).first();
+
+  mergedSettings[key] = Number(
+    values[key] ?? existing?.setting_value ??
+    (key === "visual_number_supplier_cancel_seconds" ? 255 : 270)
+  );
+}
     if (mergedSettings.visual_number_supplier_cancel_seconds > mergedSettings.visual_number_customer_refund_seconds) return jsonError("Supplier cancellation time must be at or before the customer refund time.", 400, request);
     const now = new Date().toISOString();
     const statements = [];
