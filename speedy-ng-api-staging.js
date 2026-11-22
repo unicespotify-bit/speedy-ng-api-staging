@@ -1192,13 +1192,31 @@ return respond({
           ? { driver_choice: driver }
           : {})
       };
+    
+    });
+
+    const visibleOrders = orders.filter(order => {
+      if (order.category !== "visual_numbers") {
+        return true;
+      }
+
+      const code =
+        order.delivery?.sms_code ||
+        order.sms_code ||
+        "";
+
+      return (
+        String(order.status || "").toLowerCase() === "completed" &&
+        Boolean(code)
+      );
     });
 
     return respond({
       ok: true,
-      orders,
-      count: orders.length
+      orders: visibleOrders,
+      count: visibleOrders.length
     }, 200, request);
+
   }
   // Return the Flutterwave encryption key only to an authenticated customer.
 if (
