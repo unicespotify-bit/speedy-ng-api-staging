@@ -5172,13 +5172,13 @@ message: 'Your refund becomes available when the countdown reaches zero.'
     }, 200, request);
   }
 
-  if (Number(latest?.provider_refund_confirmed || 0) !== 1) {
+    if (Number(latest?.provider_refund_confirmed || 0) !== 1) {
     return respond({
       ok: false,
       status: latest?.status || order.status,
-      message: 'Nexa has not yet confirmed the refund. Your money remains protected.'
+      message: 'Your cancellation is still being confirmed. Your money remains protected.'
     }, 409, request);
-  }
+    }
 
   const refunded = await refundVisualOrder(
     env,
@@ -5215,11 +5215,13 @@ message: 'Your refund becomes available when the countdown reaches zero.'
         `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/status`,
         { params: { driver: 'prime' } }
       );
-    } catch (error) {
+        } catch (error) {
+      console.error('Visual Number status check failed:', error?.message || error);
+
       return respond({
         ok: false,
         status: order.status,
-        message: 'Nexa status is temporarily unavailable. Your funds remain protected.'
+        message: 'Your order is being checked. Your funds remain protected.'
       }, 202, request);
     }
 
