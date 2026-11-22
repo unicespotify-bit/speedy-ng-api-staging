@@ -1153,9 +1153,15 @@ return respond({
         status,
         expires_at,
         created_at,
-        updated_at,
+                updated_at,
         delivery_json,
-        provider_response_json
+        provider_response_json,
+        EXISTS (
+          SELECT 1
+          FROM transactions t
+          WHERE t.reference = 'VN-REFUND-' || orders.id
+            AND t.status = 'successful'
+        ) AS wallet_refunded
       FROM orders
       WHERE customer_id = ?
       ORDER BY created_at DESC
@@ -1195,20 +1201,12 @@ return respond({
     
     });
 
-    const visibleOrders = orders.filter(order => {
+        const visibleOrders = orders.filter(order => {
       if (order.category !== "visual_numbers") {
         return true;
       }
 
-      const code =
-        order.delivery?.sms_code ||
-        order.sms_code ||
-        "";
-
-      return (
-        String(order.status || "").toLowerCase() === "completed" &&
-        Boolean(code)
-      );
+      return !Boolean(order.wallet_refunded);
     });
 
     return respond({
