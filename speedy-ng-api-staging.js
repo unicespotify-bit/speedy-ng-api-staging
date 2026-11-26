@@ -3053,6 +3053,19 @@ async function visualCountryName(env, countryId) {
 
   return null;
 }
+
+async function visualMarkup(env, country, service) {
+  const result = await env.DB.prepare(`SELECT markup_type, markup_value FROM pricing_rules WHERE active=1
+    AND provider IN ('youngpg_virtual','*') AND product IN ('visual_numbers','*')
+    AND country IN (?, '*') AND service IN (?, '*')
+    ORDER BY CASE WHEN provider='youngpg_virtual' THEN 0 ELSE 1 END,
+      CASE WHEN product='visual_numbers' THEN 0 ELSE 1 END,
+      CASE WHEN country=? THEN 0 ELSE 1 END,
+      CASE WHEN service=? THEN 0 ELSE 1 END LIMIT 1`).bind(String(country), String(service), String(country), String(service)).first();
+
+  return result || { markup_type: 'percent', markup_value: 0 };
+}
+
 async function getVisualOrder(env, customerId, orderId) {
   return env.DB.prepare(`SELECT id, category, service, country, quantity, amount_minor, unit_amount_minor,
     currency, status, provider, provider_order_id, provider_phone, provider_service_code,
