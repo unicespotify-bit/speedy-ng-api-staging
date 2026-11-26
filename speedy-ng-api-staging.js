@@ -3053,15 +3053,13 @@ async function visualCountryName(env, countryId) {
 
   return null;
 }
-async function visualMarkup(env, country, service) {
-  const result = await env.DB.prepare(`SELECT markup_type, markup_value FROM pricing_rules WHERE active=1
-    AND provider IN ('youngpg_virtual','*') AND product IN ('visual_numbers','*')
-    AND country IN (?, '*') AND service IN (?, '*')
-    ORDER BY CASE WHEN provider='youngpg_virtual' THEN 0 ELSE 1 END,
-      CASE WHEN product='visual_numbers' THEN 0 ELSE 1 END,
-      CASE WHEN country=? THEN 0 ELSE 1 END,
-      CASE WHEN service=? THEN 0 ELSE 1 END LIMIT 1`).bind(String(country), String(service), String(country), String(service)).first();
-  return result || { markup_type: 'percent', markup_value: 0 };
+async function getVisualOrder(env, customerId, orderId) {
+  return env.DB.prepare(`SELECT id, category, service, country, quantity, amount_minor, unit_amount_minor,
+    currency, status, provider, provider_order_id, provider_phone, provider_service_code,
+    provider_country_code, provider_status, expires_at, provider_cancel_at,
+    provider_cancel_retry_at, provider_refund_confirmed, provider_refund_at,
+    failure_reason, created_at, updated_at, delivery_json, provider_response_json
+    FROM orders WHERE id=? AND customer_id=? AND category='visual_numbers'`).bind(orderId, customerId).first();
 }
 
 async function getVisualOrder(env, customerId, orderId) {
@@ -3306,7 +3304,18 @@ async function attemptNexarVisualProviderCancellation(env, order) {
   ) {
     return { confirmed: false, reason: 'invalid_nexa_order' };
   }
+  let orderProviderDetails = {};
 
+  try {
+    orderProviderDetails = order.provider_response_json
+      ? JSON.parse(order.provider_response_json)
+      : {};
+  } catch {}
+
+  const driver =
+    orderProviderDetails?.driver === 'alternate'
+      ? 'alternate'
+      : 'prime';
   const now = Date.now();
 
   if (Number(order.provider_refund_confirmed || 0) === 1) {
@@ -3448,8 +3457,8 @@ async function attemptNexarVisualProviderCancellation(env, order) {
       env,
       `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/cancel`,
       {
-        method: 'POST',
-        params: { driver: 'prime' }
+               method: 'POST',
+        params: { driver }
       }
     );
   } catch (error) {
