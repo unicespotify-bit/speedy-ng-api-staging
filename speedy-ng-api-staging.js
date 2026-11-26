@@ -3059,7 +3059,7 @@ async function getVisualOrder(env, customerId, orderId) {
     provider_country_code, provider_status, expires_at, provider_cancel_at,
     provider_cancel_retry_at, provider_refund_confirmed, provider_refund_at,
     failure_reason, created_at, updated_at, delivery_json, provider_response_json
-    FROM orders WHERE id=? AND customer_id=? AND category='visual_numbers'`).bind(orderId, customerId).first();
+    FROM orders WHERE id=? AND customer_id=? AND category='visual_numbers'`).bind(orderId, customerId, orderId).first();
 }
 
 async function getVisualOrder(env, customerId, orderId) {
@@ -3339,7 +3339,7 @@ async function attemptNexarVisualProviderCancellation(env, order) {
     const result = await nexarCall(
       env,
       `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/status`,
-      { params: { driver: 'prime' } }
+            { params: { driver } }
     );
 
     return providerEnvelope(result.data);
@@ -3457,7 +3457,7 @@ async function attemptNexarVisualProviderCancellation(env, order) {
       env,
       `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/cancel`,
       {
-               method: 'POST',
+                    method: 'POST',
         params: { driver }
       }
     );
@@ -5251,14 +5251,26 @@ message: 'Your refund becomes available when the countdown reaches zero.'
         message: 'This purchase is awaiting provider reconciliation. Do not place it again.'
       }, 202, request);
     }
+    let orderProviderDetails = {};
 
+    try {
+      orderProviderDetails = order.provider_response_json
+        ? JSON.parse(order.provider_response_json)
+        : {};
+    } catch {}
+
+    const orderDriver =
+      orderProviderDetails?.driver === 'alternate'
+        ? 'alternate'
+        : 'prime';
     let result;
 
     try {
       result = await nexarCall(
         env,
         `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/status`,
-        { params: { driver: 'prime' } }
+        { params: { driver: orderDriver } }
+                
       );
         } catch (error) {
       console.error('Visual Number status check failed:', error?.message || error);
@@ -5342,7 +5354,7 @@ message: 'Your refund becomes available when the countdown reaches zero.'
           `virtual-numbers/orders/${encodeURIComponent(order.provider_order_id)}/cancel`,
           {
             method: 'POST',
-            params: { driver: 'prime' }
+            params: { driver: orderDriver }
           }
         );
 
