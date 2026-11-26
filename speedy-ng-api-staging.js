@@ -3059,9 +3059,8 @@ async function getVisualOrder(env, customerId, orderId) {
     provider_country_code, provider_status, expires_at, provider_cancel_at,
     provider_cancel_retry_at, provider_refund_confirmed, provider_refund_at,
     failure_reason, created_at, updated_at, delivery_json, provider_response_json
-    FROM orders WHERE id=? AND customer_id=? AND category='visual_numbers'`).bind(orderId, customerId, orderId).first();
+    FROM orders WHERE id=? AND customer_id=? AND category='visual_numbers'`).bind(orderId, customerId).first();
 }
-
 async function getVisualOrder(env, customerId, orderId) {
   return env.DB.prepare(`SELECT id, category, service, country, quantity, amount_minor, unit_amount_minor,
     currency, status, provider, provider_order_id, provider_phone, provider_service_code,
