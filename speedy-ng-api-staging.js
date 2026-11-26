@@ -4812,12 +4812,12 @@ async function nexarVisualOrderRoutes(request, env, url, path, method) {
     let quoteResult;
 
     try {
-      quoteResult = await nexarCall(
+            quoteResult = await nexarCall(
         env,
         'virtual-numbers/price',
         {
           method: 'POST',
-          params: { driver: 'prime' },
+          params: { driver },
           body: { country, service }
         }
       );
@@ -4851,7 +4851,12 @@ async function nexarVisualOrderRoutes(request, env, url, path, method) {
       return jsonError('This number is currently unavailable.', 409, request);
     }
 
-    const markup = await nexarVisualNumberMarkup(env, country, service);
+        const markup = await nexarVisualNumberMarkup(
+      env,
+      country,
+      service,
+      driver
+    );
     const markupValue = Number(markup.markup_value || 0);
 
     if (!Number.isFinite(markupValue) || markupValue < 0) {
@@ -4974,16 +4979,24 @@ async function nexarVisualOrderRoutes(request, env, url, path, method) {
     if (Number(reserved[1]?.meta?.changes || 0) !== 1) {
       return jsonError('Your USD wallet balance is insufficient.', 409, request);
     }
-
+    await env.DB.prepare(`
+      UPDATE orders
+      SET provider_response_json=?
+      WHERE id=? AND customer_id=?
+    `).bind(
+      JSON.stringify({ driver }),
+      orderId,
+      customer.id
+    ).run();
     let providerResult;
-
+    
     try {
-      providerResult = await nexarCall(
+            providerResult = await nexarCall(
         env,
         'virtual-numbers/orders',
         {
           method: 'POST',
-          params: { driver: 'prime' },
+          params: { driver },
           idempotencyKey,
           body: {
             country,
