@@ -4676,24 +4676,39 @@ async function nexarSocialBoostServicesCached(env, driver) {
 
   return pending;
 }
-async function nexarVisualNumberMarkup(env, country, service) {
+async function nexarVisualNumberMarkup(
+  env,
+  country,
+  service,
+  driver = 'prime'
+) {
+  const serverProvider = driver === 'alternate'
+    ? 'nexar_alternate'
+    : 'nexar_prime';
+
   const result = await env.DB.prepare(`
     SELECT markup_type, markup_value
     FROM pricing_rules
     WHERE active = 1
-      AND provider IN ('nexar', '*')
+      AND provider IN (?, 'nexar', '*')
       AND product IN ('visual_numbers', '*')
       AND country IN (?, '*')
       AND service IN (?, '*')
     ORDER BY
-      CASE WHEN provider = 'nexar' THEN 0 ELSE 1 END,
+      CASE
+        WHEN provider = ? THEN 0
+        WHEN provider = 'nexar' THEN 1
+        ELSE 2
+      END,
       CASE WHEN product = 'visual_numbers' THEN 0 ELSE 1 END,
       CASE WHEN country = ? THEN 0 ELSE 1 END,
       CASE WHEN service = ? THEN 0 ELSE 1 END
     LIMIT 1
   `).bind(
+    serverProvider,
     String(country),
     String(service),
+    serverProvider,
     String(country),
     String(service)
   ).first();
@@ -4730,8 +4745,12 @@ async function nexarVisualOrderRoutes(request, env, url, path, method) {
       return jsonError('Invalid purchase request.', 400, request);
     }
 
-    const country = String(body?.country || '').trim();
+        const country = String(body?.country || '').trim();
     const service = String(body?.service || '').trim();
+    const driver = String(body?.driver || 'prime')
+      .trim()
+      .toLowerCase();
+
     const idempotencyKey = String(
       request.headers.get('Idempotency-Key') ||
       body?.idempotency_key ||
@@ -4745,11 +4764,17 @@ async function nexarVisualOrderRoutes(request, env, url, path, method) {
       return jsonError('Choose a valid country and service.', 400, request);
     }
 
+    if (!['prime', 'alternate'].includes(driver)) {
+      return jsonError('Choose a valid Nexa server.', 400, request);
+    }
+
     if (!/^[a-zA-Z0-9._:-]{16,120}$/.test(idempotencyKey)) {
       return jsonError('A valid purchase reference is required.', 400, request);
     }
 
-    const requestHash = await hash(`nexar:prime:${country}:${service}`);
+    const requestHash = await hash(
+      `nexar:${driver}:${country}:${service}`
+    );
 
     const prior = await env.DB.prepare(`
       SELECT r.request_hash, r.order_id
@@ -5621,11 +5646,12 @@ if (method === 'GET' && serviceCountriesMatch) {
         );
       }
 
-      const markup = await nexarVisualNumberMarkup(
-  env,
-  country,
-  service
-);
+            const markup = await nexarVisualNumberMarkup(
+        env,
+        country,
+        service,
+        driver
+      );
 
       const markupValue = Number(markup.markup_value || 0);
 
