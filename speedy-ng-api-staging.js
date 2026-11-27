@@ -4708,14 +4708,14 @@ async function nexarVisualNumberMarkup(
       AND country IN (?, '*')
       AND service IN (?, '*')
     ORDER BY
-  CASE WHEN country = ? THEN 0 ELSE 1 END,
-  CASE WHEN service = ? THEN 0 ELSE 1 END,
-  CASE WHEN product = 'visual_numbers' THEN 0 ELSE 1 END,
-  CASE
-    WHEN provider = ? THEN 0
-    WHEN provider = 'nexar' THEN 1
-    ELSE 2
-  END
+      CASE WHEN country = ? THEN 0 ELSE 1 END,
+      CASE WHEN service = ? THEN 0 ELSE 1 END,
+      CASE WHEN product = 'visual_numbers' THEN 0 ELSE 1 END,
+      CASE
+        WHEN provider = ? THEN 0
+        WHEN provider = 'nexar' THEN 1
+        ELSE 2
+      END
     LIMIT 1
   `).bind(
     serverProvider,
@@ -4723,9 +4723,7 @@ async function nexarVisualNumberMarkup(
     String(service),
     String(country),
     String(service),
-    serverProvider,
-    String(country),
-    String(service)
+    serverProvider
   ).first();
 
   return result || {
