@@ -4721,9 +4721,9 @@ async function nexarVisualNumberMarkup(
     serverProvider,
     String(country),
     String(service),
+    serverProvider,
     String(country),
-    String(service),
-    serverProvider
+    String(service)
   ).first();
 
   return result || {
