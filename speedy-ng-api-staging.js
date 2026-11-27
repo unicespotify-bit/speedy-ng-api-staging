@@ -4718,9 +4718,11 @@ async function nexarVisualNumberMarkup(
   END
     LIMIT 1
   `).bind(
+    serverProvider,
     String(country),
     String(service),
-    serverProvider,
+    String(country),
+    String(service),
     serverProvider,
     String(country),
     String(service)
